@@ -152,6 +152,11 @@ pub enum UsageError {
     TokenRejected,
     /// The usage endpoint couldn't be reached.
     Offline(String),
+    /// Codex's session logs hold no rate limits ([`crate::codex`]): no
+    /// request on this computer yet, or Codex signs in with an API key.
+    NoCodexUsage,
+    /// Codex's session logs couldn't be read.
+    CodexLogs(String),
 }
 
 impl std::fmt::Display for UsageError {
@@ -171,6 +176,8 @@ impl std::fmt::Display for UsageError {
             UsageError::TokenExpired => write!(f, "OAuth token expired; waiting for Claude Code to refresh it"),
             UsageError::TokenRejected => write!(f, "usage endpoint refused the OAuth token"),
             UsageError::Offline(e) => write!(f, "usage endpoint unreachable: {e}"),
+            UsageError::NoCodexUsage => write!(f, "no rate limits in Codex's session logs yet"),
+            UsageError::CodexLogs(e) => write!(f, "couldn't read Codex's session logs: {e}"),
         }
     }
 }
@@ -197,6 +204,8 @@ impl UsageError {
                 | UsageError::RateLimited { .. }
                 | UsageError::Throttled { .. }
                 | UsageError::Offline(_)
+                // Retried every minute; Codex reads never back off (not the idle source).
+                | UsageError::CodexLogs(_)
         )
     }
 
@@ -241,6 +250,10 @@ impl UsageError {
                     .into()
             }
             UsageError::Offline(_) => format!("Couldn't reach Claude. {again}"),
+            UsageError::NoCodexUsage => {
+                "No Codex usage yet. It appears after Codex's next reply when Codex signs in with ChatGPT.".into()
+            }
+            UsageError::CodexLogs(_) => "Couldn't read Codex's session logs. Retrying.".into(),
         }
     }
 }

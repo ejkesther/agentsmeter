@@ -64,7 +64,8 @@ is faked behind `FlashHardware`.
   this computer via rodio, ALSA on Linux), `clock`, `liveliness` (1–5,
   default 3: the Device page's Animation silliness slider, sent as `lv`),
   `attention_anim` (`off`/`10s`/`30s`/`2m`, default `2m`, sent as `aa`
-  seconds), `pace_marker` (default off, sent as `pm`), `claude_path`,
+  seconds), `pace_marker` (default off, sent as `pm`), `codex_usage`
+  (default on: read Codex as an account while its home exists), `claude_path`,
   `release_repo`, `update_check`, `onboarding_done`, `alert_on` (alert kinds
   the daemon lets through: the hook records `k` from `hook_event_name` /
   `notification_type` and `engine.on_attention` drops the rest; default all
@@ -77,9 +78,9 @@ is faked behind `FlashHardware`.
   image or AppTranslocation, Windows temp/zip folders), and existing entries
   pointing there show as stale.
 
-## Codex hooks
+## Codex
 
-- Codex reads `$CODEX_HOME/hooks.json` (default `~/.codex`; `Paths::codex_home`)
+- Hooks: Codex reads `$CODEX_HOME/hooks.json` (default `~/.codex`; `Paths::codex_home`)
   with Claude Code's layout and input fields. The Hooks page lists it when
   that folder exists and installs `CODEX_HOOKS`: UserPromptSubmit,
   PostToolUse and Stop `clear event`, PermissionRequest `alert event`, all
@@ -90,6 +91,16 @@ is faked behind `FlashHardware`.
   `/usage` cadence or window inference (`claude_activity`, attribution).
 - On Windows Codex runs hooks as `cmd.exe /C "<command>"`; the quoted
   forward-slash exe path works there as it does in Git Bash.
+- Usage (`codex.rs`): Codex's home is one more account (`Settings::codex_home`,
+  set while it exists unless `codex_usage = off`), read with
+  `probe::Plan::CodexLogs`: the newest `token_count` `rate_limits` snapshot
+  of the `codex` bucket across the most recent `sessions/**/rollout-*.jsonl`.
+  `primary`/`secondary` become session/week; a reset that has passed since
+  reads as over (`codex::as_of`). No call, no backoff: read every 60 s and 3 s
+  after a Codex Stop. An unchanged reading isn't a poll (no `Poll` write).
+- The selector picks among Claude accounts and Codex; `claude_active` (the
+  same choice among Claude accounts alone) is what the `/usage` cadence
+  treats as shown, so a Claude prompt still polls while Codex is on the device.
 
 ## Usage sources
 

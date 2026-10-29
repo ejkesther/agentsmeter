@@ -12,7 +12,7 @@ use crate::attention::{Alert, AttentionState};
 use crate::backoff::SavedBlock;
 use crate::cadence::{heartbeat_due, AccountClock, Cadence, PollReason, Scheduler};
 use crate::config::Settings;
-use crate::events::{Activity, Agent, HookEvent, Signal};
+use crate::events::{Activity, Agent, HookEvent, HookKind, Signal};
 use crate::payload::{clock_fields, Payload};
 use crate::probe::{self, Plan as ProbePlan, Source};
 use crate::rate::{Mood, RateTracker};
@@ -24,6 +24,11 @@ pub const ACTIVITY_MIN_INTERVAL: i64 = 5;
 /// `e`/`es` ride along for this long after the event (s), so a device that
 /// reconnects or reboots later doesn't react to an old event.
 pub const EVENT_FRESH_SECS: i64 = 60;
+/// Codex's session logs are re-read this often (s): local files, no rate
+/// limit to mind ([`crate::codex`]).
+pub const CODEX_READ_SECS: i64 = 60;
+/// And this long after a Codex Stop (s), for the turn's last snapshot.
+pub const CODEX_AFTER_STOP_SECS: i64 = 3;
 
 /// Why a write happens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,9 +135,16 @@ pub struct Engine {
     claude_activity: Activity,
     attention: AttentionState,
     selector: PlanSelector<PathBuf>,
+    /// The same choice among the Claude accounts alone: the one the
+    /// `/usage` cadence treats as shown, even while Codex is on the device.
+    claude_selector: PlanSelector<PathBuf>,
     accounts: BTreeMap<PathBuf, AccountState>,
     in_flight: Vec<PathBuf>,
+    /// The account on the device (a Claude config dir, or Codex's home).
     active: Option<PathBuf>,
+    claude_active: Option<PathBuf>,
+    /// The latest Codex Stop: its logs are read again shortly after.
+    codex_stop_at: Option<i64>,
     rate: RateTracker,
     hooks_installed: bool,
     fresh_poll: bool,
@@ -172,9 +184,12 @@ impl Engine {
             claude_activity: Activity::default(),
             attention: AttentionState::default(),
             selector: PlanSelector::default(),
+            claude_selector: PlanSelector::default(),
             accounts: BTreeMap::new(),
             in_flight: Vec::new(),
             active: None,
+            claude_active: None,
+            codex_stop_at: None,
             rate: RateTracker::default(),
             hooks_installed: false,
             fresh_poll: false,
@@ -206,8 +221,8 @@ impl Engine {
         }
         self.scheduler.cadence = Cadence::from_settings(settings.poll_interval, settings.poll_interval_explicit);
         // A newly added account has never been polled, so it is due at once.
-        if settings.config_dirs != self.settings.config_dirs {
-            self.accounts.retain(|k, _| settings.config_dirs.contains(k));
+        if settings.config_dirs != self.settings.config_dirs || settings.codex_home != self.settings.codex_home {
+            self.accounts.retain(|k, _| settings.config_dirs.contains(k) || settings.codex_home.as_ref() == Some(k));
         }
         self.settings = settings;
     }
@@ -236,6 +251,8 @@ impl Engine {
         }
         if claude {
             self.claude_activity.ingest(ev);
+        } else if ev.kind == HookKind::Stop {
+            self.codex_stop_at = Some(now);
         }
         match self.activity.ingest(ev) {
             Signal::Prompt { .. } => {
@@ -344,7 +361,7 @@ impl Engine {
         let st = self.accounts.get(dir);
         let source = self.source(dir, now);
         AccountClock {
-            shown: self.active.as_ref().is_none_or(|a| a == dir),
+            shown: self.claude_active.as_ref().is_none_or(|a| a == dir),
             last_attempt: st.and_then(|a| a.last_attempt_at),
             last_failed: st.is_some_and(|a| a.last_error.is_some()),
             // The backoff is `/usage`'s (its endpoint's rate limit).
@@ -363,7 +380,34 @@ impl Engine {
     }
 
     fn refresh_at(&self, dir: &PathBuf, now: i64) -> Option<i64> {
+        if self.is_codex(dir) {
+            return None;
+        }
         self.scheduler.earliest_poll(&self.clock(dir, now))
+    }
+
+    fn is_codex(&self, dir: &PathBuf) -> bool {
+        self.settings.codex_home.as_ref() == Some(dir)
+    }
+
+    /// When Codex's logs are next due to be read, and why: at once the
+    /// first time, then every [`CODEX_READ_SECS`], sooner after a Codex Stop
+    /// or a refresh request. `None` without Codex.
+    fn codex_due(&self, now: i64) -> Option<(i64, PollReason)> {
+        let home = self.settings.codex_home.as_ref()?;
+        let Some(last) = self.accounts.get(home).and_then(|a| a.last_attempt_at) else {
+            return Some((now, PollReason::Startup));
+        };
+        let mut due = (last + CODEX_READ_SECS, PollReason::Interval);
+        for (t, why) in [
+            (self.codex_stop_at.filter(|t| *t >= last).map(|t| t + CODEX_AFTER_STOP_SECS), PollReason::AfterStop),
+            (self.scheduler.requested_at().filter(|t| *t > last), PollReason::Requested),
+        ] {
+            if let Some(t) = t.filter(|t| *t < due.0) {
+                due = (t, why);
+            }
+        }
+        Some(due)
     }
 
     /// The earliest account's next poll: (unix seconds, reason).
@@ -378,11 +422,13 @@ impl Engine {
 
     /// Start a poll: the accounts due now, stamped as attempted. `None` when
     /// nothing is due. Hand the results to [`Engine::on_poll_results`].
+    /// Codex's home rides along when its logs are due ([`ProbePlan::CodexLogs`]).
     pub fn begin_poll(&mut self, now: i64) -> Option<PollPlan> {
-        let reason = self.poll_due(now)?;
-        let accounts: Vec<PathBuf> =
+        let codex = self.codex_due(now).filter(|(t, _)| *t <= now);
+        let reason = self.poll_due(now).or(codex.map(|(_, why)| why))?;
+        let mut accounts: Vec<PathBuf> =
             self.settings.config_dirs.iter().filter(|d| self.account_due(d, now).0 <= now).cloned().collect();
-        let plans = accounts
+        let mut plans: Vec<ProbePlan> = accounts
             .iter()
             .map(|d| match self.source(d, now) {
                 Source::Probe => ProbePlan::Probe {
@@ -392,6 +438,10 @@ impl Engine {
                 Source::NotStarted(r) => ProbePlan::Known(r),
             })
             .collect();
+        if let (Some(_), Some(home)) = (codex, &self.settings.codex_home) {
+            accounts.push(home.clone());
+            plans.push(ProbePlan::CodexLogs);
+        }
         for d in &accounts {
             self.accounts.entry(d.clone()).or_default().last_attempt_at = Some(now);
         }
@@ -404,7 +454,9 @@ impl Engine {
     pub fn on_poll_results<R: Into<probe::Polled>>(&mut self, now: i64, results: Vec<(PathBuf, R)>) {
         let results: Vec<(PathBuf, probe::Polled)> = results.into_iter().map(|(d, r)| (d, r.into())).collect();
         let polled = !results.is_empty();
-        let ok_dirs: Vec<PathBuf> = results.iter().filter(|(_, r)| r.result.is_ok()).map(|(d, _)| d.clone()).collect();
+        let codex_before = self.codex_reading().cloned();
+        let mut ok_dirs: Vec<PathBuf> =
+            results.iter().filter(|(_, r)| r.result.is_ok()).map(|(d, _)| d.clone()).collect();
         for (dir, r) in results {
             let st = self.accounts.entry(dir.clone()).or_default();
             // Results without a `begin_poll` (`--once`) count as attempted now.
@@ -416,8 +468,17 @@ impl Engine {
                 log::info!("{}: {e}; not polling it for {left}s", dir.display());
             }
         }
-        // Every configured account's latest answer is a login problem.
+        // Codex's logs are read every minute: only a changed reading is new
+        // numbers, so an unchanged one doesn't feed the rate math as a poll.
+        if let (Some(home), Some(before)) = (self.settings.codex_home.clone(), codex_before) {
+            if self.codex_reading() == Some(&before) {
+                ok_dirs.retain(|d| *d != home);
+            }
+        }
+        // Every configured account's latest answer is a login problem, and
+        // Codex has nothing to show either.
         let all_auth = !self.settings.config_dirs.is_empty()
+            && self.codex_reading().is_none()
             && self
                 .settings
                 .config_dirs
@@ -431,11 +492,14 @@ impl Engine {
             self.accounts.iter().filter_map(|(k, a)| a.last.as_ref().map(|r| (k.clone(), r.session_pct()))).collect();
         let prev_active = self.active.clone();
         self.active = self.selector.choose(&sessions);
-        if self.active != prev_active && self.settings.config_dirs.len() > 1 {
+        if self.active != prev_active && sessions.len() > 1 {
             if let Some(a) = &self.active {
                 log::info!("active plan: {}", a.display());
             }
         }
+        let claude: Vec<(PathBuf, u32)> =
+            sessions.into_iter().filter(|(k, _)| self.settings.config_dirs.contains(k)).collect();
+        self.claude_active = self.claude_selector.choose(&claude);
         // Only numbers read in this cycle for the shown account are a real
         // poll. When it missed (another account answered), its last values
         // must not enter the rate math, here or on the device: no `Poll`
@@ -450,6 +514,11 @@ impl Engine {
         self.in_flight.clear();
         self.logged_out = all_auth;
         self.fresh_poll = active_fresh || (all_auth && polled);
+    }
+
+    /// Codex's latest reading, when it has one.
+    fn codex_reading(&self) -> Option<&UsageReading> {
+        self.settings.codex_home.as_ref().and_then(|h| self.accounts.get(h)).and_then(|a| a.last.as_ref())
     }
 
     fn active_state(&self) -> Option<&AccountState> {
@@ -961,6 +1030,65 @@ mod tests {
         let due = plans(&mut e, T0 + 3700);
         let [ProbePlan::Known(r)] = due.as_slice() else { panic!("{due:?}") };
         assert_eq!(r.session, None);
+    }
+
+    fn with_codex() -> (Engine, PathBuf, PathBuf) {
+        let mut s = settings("");
+        s.codex_home = Some(PathBuf::from("/h/.codex"));
+        let mut e = Engine::new(s);
+        e.set_hooks_installed(true);
+        (e, PathBuf::from("/h/.claude"), PathBuf::from("/h/.codex"))
+    }
+
+    // Codex's logs are one more account: read on their own short cadence,
+    // shown while Codex is the one moving, and the Claude cadence still
+    // treats the Claude account as shown meanwhile.
+    #[test]
+    fn codex_is_one_more_account() {
+        let (mut e, a, codex) = with_codex();
+        let p = e.begin_poll(T0).unwrap();
+        assert_eq!(p.accounts, vec![a.clone(), codex.clone()]);
+        assert_eq!(p.plans, vec![ProbePlan::Usage, ProbePlan::CodexLogs]);
+        e.on_poll_results(T0, vec![(a.clone(), Ok(reading(15))), (codex.clone(), Ok(reading(40)))]);
+        assert_eq!(e.status(T0).active_account, Some(codex.clone()), "the higher one at first");
+        assert_eq!(write(&mut e, T0).unwrap().payload.s, Some(40));
+
+        // Every minute, alone; the same numbers again aren't a poll write.
+        assert!(e.begin_poll(T0 + 59).is_none());
+        let p = e.begin_poll(T0 + 60).unwrap();
+        assert_eq!((p.accounts, p.plans), (vec![codex.clone()], vec![ProbePlan::CodexLogs]));
+        e.on_poll_results(T0 + 60, vec![(codex.clone(), Ok(reading(40)))]);
+        assert_ne!(write(&mut e, T0 + 60).map(|w| w.kind), Some(WriteKind::Poll));
+
+        // A Codex Stop reads them again shortly after.
+        e.on_hook_event(&HookEvent { agent: Agent::Codex, ..ev(T0 + 70, "Stop") }, T0 + 70);
+        assert!(e.begin_poll(T0 + 72).is_none());
+        let p = e.begin_poll(T0 + 73).unwrap();
+        assert_eq!((p.reason, p.accounts), (PollReason::AfterStop, vec![codex.clone()]));
+        e.on_poll_results(T0 + 73, vec![(codex.clone(), Ok(reading(42)))]);
+        let w = write(&mut e, T0 + 73).unwrap();
+        assert_eq!((w.kind, w.payload.s, w.payload.rp), (WriteKind::Poll, Some(42), None));
+        assert_eq!(e.status(T0 + 73).refresh_at, None, "a refresh can read Codex any time");
+
+        // A Claude prompt still polls the Claude account while Codex shows.
+        e.on_hook_event(&ev(T0 + 200, "UserPromptSubmit"), T0 + 200);
+        let p = e.begin_poll(T0 + 200).unwrap();
+        assert!(p.accounts.contains(&a), "{:?}", p.accounts);
+        e.on_poll_results(T0 + 200, vec![(a.clone(), Ok(reading(16))), (codex.clone(), Ok(reading(42)))]);
+        assert_eq!(e.status(T0 + 200).active_account, Some(a.clone()), "Claude moved last");
+
+        // Claude signed out, Codex still has numbers: not "no data".
+        e.on_poll_results(T0 + 400, vec![(a.clone(), Err(UsageError::NotLoggedIn("x".into())))]);
+        assert!(!e.status(T0 + 400).logged_out);
+    }
+
+    #[test]
+    fn codex_without_usage_stays_off_the_device() {
+        let (mut e, a, codex) = with_codex();
+        e.on_poll_results(T0, vec![(a.clone(), Ok(reading(15))), (codex.clone(), Err(UsageError::NoCodexUsage))]);
+        assert_eq!(e.status(T0).active_account, Some(a));
+        // Nothing backs off: it is read again a minute later.
+        assert_eq!(e.begin_poll(T0 + 60).map(|p| p.accounts), Some(vec![codex]));
     }
 
     #[test]

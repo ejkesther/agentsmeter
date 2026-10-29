@@ -139,7 +139,13 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
     });
     log::info!(
         "accounts: {}",
-        settings.config_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
+        settings
+            .config_dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .chain(settings.codex_home.iter().map(|h| format!("{} (Codex)", h.display())))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     let mut engine = Engine::new(settings);
     // Blocks the usage endpoint set survive restarts (a call during one
@@ -273,8 +279,11 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
         if polling.as_ref().is_some_and(JoinHandle::is_finished) {
             if let Ok(results) = polling.take().expect("checked").await {
                 for (d, r) in &results {
-                    if let Err(e) = &r.result {
-                        log::warn!("{}: {e}", d.display());
+                    match &r.result {
+                        // Read every minute until Codex has been used here.
+                        Err(e @ usage::UsageError::NoCodexUsage) => log::debug!("{}: {e}", d.display()),
+                        Err(e) => log::warn!("{}: {e}", d.display()),
+                        Ok(_) => {}
                     }
                 }
                 engine.on_poll_results(unix_now(), results);
@@ -422,13 +431,16 @@ pub fn once(paths: &Paths) -> i32 {
     for (d, b) in &blocked {
         println!("{}: {}", d.display(), usage::paused_message(b.until, clawdmeter_core::platform::utc_offset_secs()));
     }
-    // Nothing is known yet, so the idle source for every account (no message).
-    let accounts: Vec<PathBuf> = settings.config_dirs.iter().filter(|d| !blocked.contains_key(*d)).cloned().collect();
-    let plan = PollPlan {
-        reason: clawdmeter_core::cadence::PollReason::Startup,
-        plans: vec![probe::Plan::Usage; accounts.len()],
-        accounts,
-    };
+    // Nothing is known yet, so the idle source for every account (no
+    // message), and Codex's own logs.
+    let mut accounts: Vec<PathBuf> =
+        settings.config_dirs.iter().filter(|d| !blocked.contains_key(*d)).cloned().collect();
+    let mut plans = vec![probe::Plan::Usage; accounts.len()];
+    if let Some(home) = &settings.codex_home {
+        accounts.push(home.clone());
+        plans.push(probe::Plan::CodexLogs);
+    }
+    let plan = PollPlan { reason: clawdmeter_core::cadence::PollReason::Startup, plans, accounts };
     let results = poll_all(claude, plan, paths.home.clone(), paths.state_dir.clone());
     let mut ok = false;
     for (d, r) in &results {

@@ -829,6 +829,45 @@ impl SettingsView {
                 "Removing a folder stops monitoring it; its files and installed hooks stay in place."
             },
         ));
+        // Codex: one more account while its home exists, read from its own
+        // session logs.
+        if let Some(home) = &self.settings.codex_home {
+            let hs = home.display().to_string();
+            let err = errors.iter().find(|e| e.dir == hs);
+            let (meta, chip) = match (err, active.as_deref() == Some(hs.as_str())) {
+                (Some(e), _) if e.retrying => (e.message.clone(), Some(pill(t, "Retrying", Tone::Warn))),
+                // No usage yet is a state, not a fault.
+                (Some(e), _) => (e.message.clone(), None),
+                (None, true) => (String::new(), Some(pill(t, "On device", Tone::Ok))),
+                (None, false) if self.snap.is_some() => ("Not selected for the device".to_string(), None),
+                (None, false) => ("Start Clawdmeter to check usage.".to_string(), None),
+            };
+            let row = div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .px(px(14.))
+                .py(px(12.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(div().font_family(FONT_MONO).text_size(px(13.)).child(tilde(&hs, &self.paths.home)))
+                        .when(!meta.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(t.mute).child(meta))),
+                )
+                .when_some(chip, |r, c| r.child(c));
+            pane = pane
+                .child(subheading(t, "Codex"))
+                .child(div().flex().flex_col().rounded(px(R_M)).border_1().border_color(t.line).child(row))
+                .child(caption(
+                    t,
+                    "Codex's usage comes from its session logs on this computer, with no network call. Set \
+                     codex_usage = off in the config to stop reading it.",
+                ));
+        }
         if self.snap.is_none() {
             pane = pane.child(notice(t, Tone::Plain, not_running_text()));
         }

@@ -203,6 +203,9 @@ pub enum Plan {
     Usage,
     /// This reading, no call ([`Source::NotStarted`]).
     Known(UsageReading),
+    /// Codex's session logs under the account (its home): a local read, no
+    /// call ([`crate::codex`]).
+    CodexLogs,
 }
 
 /// The idle source for one account: the usage endpoint with Claude Code's
@@ -258,6 +261,8 @@ pub fn poll(
     let probe = |result, probe_missed| Polled { result, idle: false, probe_missed };
     match (plan, claude) {
         (Plan::Known(r), _) => probe(Ok(r.clone()), false),
+        // Not the idle source: a miss here backs nothing off.
+        (Plan::CodexLogs, _) => probe(crate::codex::read(config_dir, now), false),
         (Plan::Usage, _) | (Plan::Probe { .. }, None) => poll_idle(claude, config_dir, home, now).into(),
         (Plan::Probe { usage_fallback }, Some(c)) => match run_probe(c, config_dir, home, cwd, usage::CLI_TIMEOUT) {
             Ok(r) => probe(Ok(r), false),
