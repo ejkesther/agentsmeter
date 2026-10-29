@@ -222,6 +222,7 @@ class Engine:
             self.sims = list(pool.map(lambda p: Sim(p, self.log_dir), self.profiles))
         self.now = 0
         self.state = dict(USAGE, lv=3, tf=24)
+        self.wall_clock = True      # send `t`; `clock off` stops it, as the app's default
         self.connected = True
         self.heartbeat = True
         self.battery_state = (87, False, False)
@@ -263,7 +264,8 @@ class Engine:
         if not self.connected:
             return
         p = dict(self.state)
-        p["t"] = CLOCK_EPOCH + self.now // 1000
+        if self.wall_clock:
+            p["t"] = CLOCK_EPOCH + self.now // 1000
         if replay:
             p["rp"] = 1
         if extra:
@@ -380,9 +382,12 @@ class Engine:
         """The pace marker on the usage bars (pm)."""
         return self.payload(pm=int(bool(on)))
 
-    def clock(self, fmt=24):
-        """Clock format, 12 or 24 (tf)."""
-        return self.payload(tf=int(fmt))
+    def clock(self, fmt="24"):
+        """Clock format, 12 or 24 (tf), or off: no `t`, as the app sends by
+        default, so the title names the agent (`pv`) or reads "Usage"."""
+        with self.lock:
+            self.wall_clock = str(fmt).lower() != "off"
+            return self.payload(**({"tf": int(fmt)} if self.wall_clock else {}))
 
     def link(self, on=True):
         """The BLE link up or down on every board."""
