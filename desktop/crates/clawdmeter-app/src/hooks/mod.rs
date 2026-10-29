@@ -1,6 +1,7 @@
-//! Claude Code hooks: `clawdmeter hook <alert|clear|event> [event]` (the hook
-//! itself, see [`run`]) and the installer that wires it into each account's
-//! `settings.json` ([`install`]).
+//! Claude Code and Codex hooks: `clawdmeter hook <alert|clear|event> [event]
+//! [--agent codex]` (the hook itself, see [`run`]) and the installer that
+//! wires it into each account's `settings.json` and Codex's `hooks.json`
+//! ([`install`]).
 //!
 //! The hook writes the files the daemon follows, under the state dir
 //! (`~/.config/clawdmeter`, `%LOCALAPPDATA%\Clawdmeter` on Windows):
@@ -10,10 +11,13 @@
 //!   turned off, see [`clawdmeter_core::attention::AlertKind`]);
 //! * `clear` touches `clear-<session id>`;
 //! * `event` appends `<unix_ts> <hook_event_name> <session_id>` to
-//!   `events.log`, rolling it to `events.log.1` past 256 KB.
+//!   `events.log`, rolling it to `events.log.1` past 256 KB. With
+//!   `--agent codex` the name reads `codex:<hook_event_name>`.
 //!
 //! `alert event` / `clear event` do both from one read of stdin. Only the
 //! event name and session id are recorded, never the prompt or the tool call.
+//! Codex sends Claude Code's input fields (`hook_event_name`, `session_id`,
+//! `transcript_path`), so one hook serves both.
 //! Hook stdout can reach the model, so the hook prints nothing and always
 //! exits 0. The file formats match the legacy `attention-hook.sh` byte for
 //! byte apart from the alert's `k`, which older readers ignore.
@@ -26,6 +30,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use clawdmeter_core::attention::AlertKind;
+use clawdmeter_core::events::Agent;
 use serde_json::{Map, Value};
 
 /// `events.log` rolls over once it is larger than this.
@@ -39,6 +44,8 @@ pub struct Mode {
     pub action: Action,
     /// The second argument was `event`: also log the event.
     pub log_too: bool,
+    /// `--agent codex` anywhere after them: Codex runs this hook.
+    pub agent: Agent,
 }
 
 /// The first argument.
@@ -63,7 +70,11 @@ impl Mode {
             Some("event") => Action::Event,
             _ => Action::None,
         };
-        Mode { action, log_too: args.get(1).map(String::as_str) == Some("event") }
+        let agent = match args.iter().position(|a| a == "--agent").and_then(|i| args.get(i + 1)) {
+            Some(a) if a == "codex" => Agent::Codex,
+            _ => Agent::Claude,
+        };
+        Mode { action, log_too: args.get(1).map(String::as_str) == Some("event"), agent }
     }
 }
 
@@ -76,12 +87,12 @@ pub fn run(mode: Mode, input: &str, state_dir: &Path, now_unix: u64) {
     // Invalid JSON: the script's jq calls all fail, so nothing is written.
     let Ok(v) = serde_json::from_str::<Value>(input) else { return };
     if mode.log_too {
-        let _ = log_event(&v, state_dir, now_unix);
+        let _ = log_event(&v, mode.agent, state_dir, now_unix);
     }
     let _ = match mode.action {
         Action::Alert => write_alert(&v, state_dir),
         Action::Clear => touch_clear(&v, state_dir),
-        Action::Event => log_event(&v, state_dir, now_unix),
+        Action::Event => log_event(&v, mode.agent, state_dir, now_unix),
         Action::None => Ok(()),
     };
 }
@@ -113,33 +124,39 @@ fn as_jq_object(v: &Value) -> Option<std::borrow::Cow<'_, Map<String, Value>>> {
     }
 }
 
-/// The Claude Code config dir (account) a hook input comes from: the
-/// directory holding `projects/` in its `transcript_path`
-/// (`<config dir>/projects/<project>/<session>.jsonl`).
-pub fn account_of(v: &Value) -> Option<String> {
+/// Where a hook input's session lives, from its `transcript_path`: for
+/// Claude Code the config dir (account) holding `projects/`
+/// (`<config dir>/projects/<project>/<session>.jsonl`), for Codex its home
+/// holding `sessions/` (`<home>/sessions/<yyyy>/<mm>/<dd>/rollout-….jsonl`).
+pub fn account_of(v: &Value, agent: Agent) -> Option<String> {
     let path = Path::new(v.get("transcript_path")?.as_str()?);
-    let dir = path.ancestors().find(|a| a.file_name().is_some_and(|n| n == "projects"))?.parent()?;
+    let marker = match agent {
+        Agent::Claude => "projects",
+        Agent::Codex => "sessions",
+    };
+    let dir = path.ancestors().find(|a| a.file_name().is_some_and(|n| n == marker))?.parent()?;
     let s = dir.to_str()?;
     (!s.is_empty() && !s.chars().any(char::is_control)).then(|| s.to_owned())
 }
 
 /// `<ts> <event> <session> [<config dir>]`: event and session reduced to
-/// `[A-Za-z0-9_.-]`, the config dir ([`account_of`]) as the rest of the line
-/// when the input has a transcript path.
-pub fn event_line(v: &Value, now_unix: u64) -> Option<String> {
+/// `[A-Za-z0-9_.-]` (the event then prefixed `codex:` for Codex), the config
+/// dir ([`account_of`]) as the rest of the line when the input has a
+/// transcript path.
+pub fn event_line(v: &Value, agent: Agent, now_unix: u64) -> Option<String> {
     // `.hook_event_name` on a non-object is a jq error: no line.
     let obj = as_jq_object(v)?;
     let name = present(obj.get("hook_event_name")).map_or_else(|| "unknown".to_owned(), jq_tostring);
     let sid = present(obj.get("session_id")).map_or_else(|| "-".to_owned(), jq_tostring);
-    let (name, sid) = (sanitize(&name), sanitize(&sid));
-    Some(match account_of(v) {
+    let (name, sid) = (format!("{}{}", agent.prefix(), sanitize(&name)), sanitize(&sid));
+    Some(match account_of(v, agent) {
         Some(acct) => format!("{now_unix} {name} {} {acct}\n", if sid.is_empty() { "-" } else { &sid }),
         None => format!("{now_unix} {name} {sid}\n"),
     })
 }
 
-fn log_event(v: &Value, dir: &Path, now_unix: u64) -> io::Result<()> {
-    let Some(line) = event_line(v, now_unix) else { return Ok(()) };
+fn log_event(v: &Value, agent: Agent, dir: &Path, now_unix: u64) -> io::Result<()> {
+    let Some(line) = event_line(v, agent, now_unix) else { return Ok(()) };
     let f = dir.join("events.log");
     if fs::metadata(&f).is_ok_and(|m| m.is_file() && m.len() > EVENTS_ROLL_BYTES) {
         let _ = fs::rename(&f, dir.join("events.log.1"));
@@ -152,8 +169,13 @@ fn log_event(v: &Value, dir: &Path, now_unix: u64) -> io::Result<()> {
 /// plus `k`, the alert kind.
 pub fn alert_json(v: &Value) -> Option<String> {
     let obj = as_jq_object(v)?;
+    let text = |k: &str| obj.get(k).and_then(Value::as_str);
+    let event = text("hook_event_name");
     let m = match present(obj.get("message")) {
         Some(m) => m.clone(),
+        // Codex's PermissionRequest: `tool_input` holds the tool's own
+        // arguments (any shape), never a question, and it always alerts.
+        None if event == Some("PermissionRequest") => Value::String(String::new()),
         // jq raises (and the script writes nothing) when a step along
         // `.tool_input.questions[0].question` has the wrong type.
         None => {
@@ -161,8 +183,7 @@ pub fn alert_json(v: &Value) -> Option<String> {
         }
     };
     let s = obj.get("session_id").cloned().unwrap_or(Value::Null);
-    let text = |k: &str| obj.get(k).and_then(Value::as_str);
-    let kind = AlertKind::from_hook(text("hook_event_name"), text("notification_type"));
+    let kind = AlertKind::from_hook(event, text("notification_type"));
     let mut out = Map::new();
     out.insert("k".into(), Value::String(kind.as_str().into()));
     out.insert("m".into(), m);
@@ -255,37 +276,70 @@ mod tests {
 
     #[test]
     fn mode_grammar() {
-        assert_eq!(Mode::parse(&args("alert")), Mode { action: Action::Alert, log_too: false });
-        assert_eq!(Mode::parse(&args("clear event")), Mode { action: Action::Clear, log_too: true });
-        assert_eq!(Mode::parse(&args("event")), Mode { action: Action::Event, log_too: false });
-        assert_eq!(Mode::parse(&args("bogus event")), Mode { action: Action::None, log_too: true });
-        assert_eq!(Mode::parse(&[]), Mode { action: Action::None, log_too: false });
+        assert_eq!(Mode::parse(&args("alert")), Mode { action: Action::Alert, log_too: false, agent: Agent::Claude });
+        assert_eq!(
+            Mode::parse(&args("clear event")),
+            Mode { action: Action::Clear, log_too: true, agent: Agent::Claude }
+        );
+        assert_eq!(Mode::parse(&args("event")), Mode { action: Action::Event, log_too: false, agent: Agent::Claude });
+        assert_eq!(
+            Mode::parse(&args("bogus event")),
+            Mode { action: Action::None, log_too: true, agent: Agent::Claude }
+        );
+        assert_eq!(Mode::parse(&[]), Mode { action: Action::None, log_too: false, agent: Agent::Claude });
+        assert_eq!(
+            Mode::parse(&args("clear event --agent codex")),
+            Mode { action: Action::Clear, log_too: true, agent: Agent::Codex }
+        );
+        assert_eq!(
+            Mode::parse(&args("event --agent codex")),
+            Mode { action: Action::Event, log_too: false, agent: Agent::Codex }
+        );
+        assert_eq!(Mode::parse(&args("event --agent")).agent, Agent::Claude);
+        assert_eq!(Mode::parse(&args("event --agent cursor")).agent, Agent::Claude);
     }
 
     #[test]
     fn event_lines() {
         let v = json!({"hook_event_name": "Stop", "session_id": "ab-12.x_y", "prompt": "secret"});
-        assert_eq!(event_line(&v, 7).unwrap(), "7 Stop ab-12.x_y\n");
-        assert_eq!(event_line(&json!({}), 7).unwrap(), "7 unknown -\n");
-        assert_eq!(event_line(&json!({"session_id": ""}), 7).unwrap(), "7 unknown \n");
+        assert_eq!(event_line(&v, Agent::Claude, 7).unwrap(), "7 Stop ab-12.x_y\n");
+        assert_eq!(event_line(&json!({}), Agent::Claude, 7).unwrap(), "7 unknown -\n");
+        assert_eq!(event_line(&json!({"session_id": ""}), Agent::Claude, 7).unwrap(), "7 unknown \n");
         assert_eq!(
-            event_line(&json!({"hook_event_name": "Pré Tool$Use", "session_id": 42}), 7).unwrap(),
+            event_line(&json!({"hook_event_name": "Pré Tool$Use", "session_id": 42}), Agent::Claude, 7).unwrap(),
             "7 PrToolUse 42\n"
         );
-        assert_eq!(event_line(&json!({"session_id": false, "hook_event_name": null}), 7).unwrap(), "7 unknown -\n");
-        assert_eq!(event_line(&json!({"session_id": {"a": [1, "b"]}}), 7).unwrap(), "7 unknown a1b\n");
-        assert!(event_line(&json!([1]), 7).is_none());
-        assert_eq!(event_line(&Value::Null, 7).unwrap(), "7 unknown -\n");
+        assert_eq!(
+            event_line(&json!({"session_id": false, "hook_event_name": null}), Agent::Claude, 7).unwrap(),
+            "7 unknown -\n"
+        );
+        assert_eq!(event_line(&json!({"session_id": {"a": [1, "b"]}}), Agent::Claude, 7).unwrap(), "7 unknown a1b\n");
+        assert!(event_line(&json!([1]), Agent::Claude, 7).is_none());
+        assert_eq!(event_line(&Value::Null, Agent::Claude, 7).unwrap(), "7 unknown -\n");
         // The account comes from the transcript path.
         let v = json!({"hook_event_name": "UserPromptSubmit", "session_id": "s",
             "transcript_path": "/home/me/My Claude/projects/-home-me-code/s.jsonl"});
-        assert_eq!(event_line(&v, 7).unwrap(), "7 UserPromptSubmit s /home/me/My Claude\n");
-        let parsed = clawdmeter_core::events::parse_line(event_line(&v, 7).unwrap().trim_end()).unwrap();
+        assert_eq!(event_line(&v, Agent::Claude, 7).unwrap(), "7 UserPromptSubmit s /home/me/My Claude\n");
+        let parsed = clawdmeter_core::events::parse_line(event_line(&v, Agent::Claude, 7).unwrap().trim_end()).unwrap();
         assert_eq!(parsed.account.as_deref(), Some(Path::new("/home/me/My Claude")));
         let v = json!({"session_id": "", "transcript_path": "/h/.claude/projects/p/x.jsonl"});
-        assert_eq!(event_line(&v, 7).unwrap(), "7 unknown - /h/.claude\n");
-        assert_eq!(account_of(&json!({"transcript_path": "/tmp/x.jsonl"})), None);
-        assert_eq!(account_of(&json!({"transcript_path": "/h/pro\njects/projects/p/x.jsonl"})), None);
+        assert_eq!(event_line(&v, Agent::Claude, 7).unwrap(), "7 unknown - /h/.claude\n");
+        assert_eq!(account_of(&json!({"transcript_path": "/tmp/x.jsonl"}), Agent::Claude), None);
+        assert_eq!(account_of(&json!({"transcript_path": "/h/pro\njects/projects/p/x.jsonl"}), Agent::Claude), None);
+        // Codex: the event is tagged, the account is the home above sessions/.
+        let v = json!({"hook_event_name": "UserPromptSubmit", "session_id": "0199-ab", "turn_id": "t1",
+            "transcript_path": "/home/me/.codex/sessions/2026/10/28/rollout-2026-10-28T10-00-00-0199-ab.jsonl"});
+        let line = event_line(&v, Agent::Codex, 7).unwrap();
+        assert_eq!(line, "7 codex:UserPromptSubmit 0199-ab /home/me/.codex\n");
+        let parsed = clawdmeter_core::events::parse_line(line.trim_end()).unwrap();
+        assert_eq!((parsed.agent, parsed.kind), (Agent::Codex, clawdmeter_core::events::HookKind::UserPromptSubmit));
+        assert_eq!(parsed.account.as_deref(), Some(Path::new("/home/me/.codex")));
+        // Codex's transcript may be absent; a Claude transcript isn't a Codex home.
+        assert_eq!(
+            event_line(&json!({"hook_event_name": "Stop", "session_id": "x"}), Agent::Codex, 7).unwrap(),
+            "7 codex:Stop x\n"
+        );
+        assert_eq!(account_of(&json!({"transcript_path": "/h/.claude/projects/p/x.jsonl"}), Agent::Codex), None);
     }
 
     #[test]
@@ -315,6 +369,14 @@ mod tests {
             alert_json(&json!({"message": "a\u{7f}\"b"})).unwrap(),
             "{\"k\":\"permission\",\"m\":\"a\\u007f\\\"b\",\"s\":null}\n"
         );
+        // Codex's PermissionRequest alerts whatever its tool input looks like.
+        for tool_input in
+            [json!({"command": "rm -rf build", "description": null}), json!("*** Begin Patch"), json!([1])]
+        {
+            let p = json!({"hook_event_name": "PermissionRequest", "session_id": "c1", "turn_id": "t",
+                "tool_name": "Bash", "tool_input": tool_input});
+            assert_eq!(alert_json(&p).unwrap(), "{\"k\":\"permission\",\"m\":\"\",\"s\":\"c1\"}\n", "{p}");
+        }
     }
 
     #[test]
@@ -351,6 +413,25 @@ mod tests {
             .unwrap()
             .flatten()
             .all(|e| !e.file_name().to_string_lossy().starts_with("attention.")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn codex_hooks_write_the_same_files() {
+        let d = dir("codex");
+        let codex = |mode: &str| Mode::parse(&args(&format!("{mode} --agent codex")));
+        let input = r#"{"hook_event_name":"PermissionRequest","session_id":"c1","turn_id":"t","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        run(codex("alert event"), input, &d, 100);
+        assert_eq!(
+            fs::read_to_string(d.join("attention")).unwrap(),
+            "{\"k\":\"permission\",\"m\":\"\",\"s\":\"c1\"}\n"
+        );
+        run(codex("clear event"), r#"{"hook_event_name":"Stop","session_id":"c1","stop_hook_active":false}"#, &d, 101);
+        assert!(d.join("clear-c1").is_file());
+        assert_eq!(
+            fs::read_to_string(d.join("events.log")).unwrap(),
+            "100 codex:PermissionRequest c1\n101 codex:Stop c1\n"
+        );
         let _ = fs::remove_dir_all(&d);
     }
 

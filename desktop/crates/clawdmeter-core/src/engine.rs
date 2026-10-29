@@ -12,7 +12,7 @@ use crate::attention::{Alert, AttentionState};
 use crate::backoff::SavedBlock;
 use crate::cadence::{heartbeat_due, AccountClock, Cadence, PollReason, Scheduler};
 use crate::config::Settings;
-use crate::events::{Activity, HookEvent, Signal};
+use crate::events::{Activity, Agent, HookEvent, Signal};
 use crate::payload::{clock_fields, Payload};
 use crate::probe::{self, Plan as ProbePlan, Source};
 use crate::rate::{Mood, RateTracker};
@@ -124,7 +124,10 @@ pub struct EngineStatus {
 pub struct Engine {
     settings: Settings,
     scheduler: Scheduler,
+    /// Every agent's hook events: what Clawd shows (`a`, `e`/`es`, `n`).
     activity: Activity,
+    /// Claude Code's alone: what the `/usage` cadence follows.
+    claude_activity: Activity,
     attention: AttentionState,
     selector: PlanSelector<PathBuf>,
     accounts: BTreeMap<PathBuf, AccountState>,
@@ -166,6 +169,7 @@ impl Engine {
             settings,
             scheduler: Scheduler::new(cadence),
             activity: Activity::default(),
+            claude_activity: Activity::default(),
             attention: AttentionState::default(),
             selector: PlanSelector::default(),
             accounts: BTreeMap::new(),
@@ -216,23 +220,34 @@ impl Engine {
     /// History from events.log at start-up (no `e` is emitted for it).
     pub fn seed_events(&mut self, events: &[HookEvent]) {
         self.activity.seed(events);
+        let claude: Vec<HookEvent> = events.iter().filter(|e| e.agent == Agent::Claude).cloned().collect();
+        self.claude_activity.seed(&claude);
     }
 
-    /// One live hook event.
+    /// One live hook event. Every agent's moves Clawd; only Claude Code's
+    /// counts as Claude activity (window inference, poll cadence).
     pub fn on_hook_event(&mut self, ev: &HookEvent, now: i64) {
-        if ev.kind.sends_messages() {
+        let claude = ev.agent == Agent::Claude;
+        if claude && ev.kind.sends_messages() {
             match ev.account.as_ref().and_then(|a| self.settings.config_dirs.iter().find(|d| *d == a)) {
                 Some(d) => self.accounts.entry(d.clone()).or_default().note_activity(ev.ts),
                 None => self.unattributed_activity = self.unattributed_activity.max(Some(ev.ts)),
             }
         }
+        if claude {
+            self.claude_activity.ingest(ev);
+        }
         match self.activity.ingest(ev) {
             Signal::Prompt { .. } => {
-                self.scheduler.on_prompt(now);
+                if claude {
+                    self.scheduler.on_prompt(now);
+                }
                 self.last_event_ts = Some(now);
             }
             Signal::Stop => {
-                self.scheduler.on_stop(now);
+                if claude {
+                    self.scheduler.on_stop(now);
+                }
                 self.last_event_ts = Some(now);
             }
             Signal::Tool | Signal::Other => {}
@@ -344,7 +359,7 @@ impl Engine {
     }
 
     fn account_due(&self, dir: &PathBuf, now: i64) -> (i64, PollReason) {
-        self.scheduler.account_due(&self.clock(dir, now), &self.activity, self.hooks_installed, now)
+        self.scheduler.account_due(&self.clock(dir, now), &self.claude_activity, self.hooks_installed, now)
     }
 
     fn refresh_at(&self, dir: &PathBuf, now: i64) -> Option<i64> {
@@ -454,6 +469,7 @@ impl Engine {
     /// successful write; on failure just call this again next tick.
     pub fn next_write(&mut self, now: i64, host: HostClock) -> Option<Write> {
         self.activity.prune(now);
+        self.claude_activity.prune(now);
         let level = self.activity.level(now);
         let sessions = self.activity.sessions_active(now);
         let hooks = self.activity.hooks_seen;
@@ -630,7 +646,7 @@ mod tests {
     }
 
     fn ev(ts: i64, kind: &str) -> HookEvent {
-        HookEvent { ts, kind: HookKind::parse(kind), session: "s1".into(), account: None }
+        HookEvent { ts, kind: HookKind::parse(kind), session: "s1".into(), account: None, agent: Agent::Claude }
     }
 
     fn write(e: &mut Engine, now: i64) -> Option<Write> {
@@ -907,6 +923,44 @@ mod tests {
         // Old events stop riding along after a minute.
         let w = e.next_write(T0 + 200, HostClock::default()).unwrap();
         assert_eq!((w.payload.e, w.payload.es), (None, None));
+    }
+
+    // Codex's hook events move Clawd like Claude Code's, but never poll
+    // Claude or count as Claude activity that starts a window.
+    #[test]
+    fn codex_events_move_clawd_not_claude_polls() {
+        let mut e = Engine::new(settings(""));
+        e.set_hooks_installed(true);
+        let a = PathBuf::from("/h/.claude");
+        e.on_poll_results(T0, vec![(a.clone(), Ok(reading(15)))]); // resets at T0 + 3600
+        write(&mut e, T0).unwrap();
+        let codex = |ts, kind| HookEvent { agent: Agent::Codex, account: Some("/h/.codex".into()), ..ev(ts, kind) };
+
+        e.on_hook_event(&codex(T0 + 200, "UserPromptSubmit"), T0 + 200);
+        let w = write(&mut e, T0 + 200).unwrap();
+        assert_eq!(
+            (w.kind, w.payload.e.as_deref(), w.payload.es, w.payload.n),
+            (WriteKind::Event, Some("p"), Some(1), Some(1))
+        );
+        assert!(e.begin_poll(T0 + 200).is_none(), "a Codex prompt doesn't poll Claude");
+        for i in 0..5 {
+            e.on_hook_event(&codex(T0 + 201 + i, "PostToolUse"), T0 + 201 + i);
+        }
+        assert_eq!(write(&mut e, T0 + 206).unwrap().payload.a, Some(2));
+        e.on_hook_event(&codex(T0 + 300, "Stop"), T0 + 300);
+        assert_eq!(write(&mut e, T0 + 300).unwrap().payload.e.as_deref(), Some("s"));
+        assert!(e.begin_poll(T0 + 320).is_none(), "nor does its Stop");
+        // A Claude Code prompt still does (its working cadence is overdue).
+        e.on_hook_event(&ev(T0 + 330, "UserPromptSubmit"), T0 + 330);
+        assert!(e.poll_due(T0 + 330).is_some());
+        e.on_poll_results(T0 + 330, vec![(a.clone(), Ok(reading(16)))]);
+
+        // Past the reset, only Codex has been busy: Claude's window is over,
+        // with no call.
+        e.on_hook_event(&codex(T0 + 3700, "UserPromptSubmit"), T0 + 3700);
+        let due = plans(&mut e, T0 + 3700);
+        let [ProbePlan::Known(r)] = due.as_slice() else { panic!("{due:?}") };
+        assert_eq!(r.session, None);
     }
 
     #[test]

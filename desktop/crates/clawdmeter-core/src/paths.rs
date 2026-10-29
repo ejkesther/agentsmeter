@@ -19,6 +19,9 @@ pub struct Paths {
     pub config_file: PathBuf,
     /// Firmware downloads and update-check state.
     pub cache_dir: PathBuf,
+    /// Codex's home (`$CODEX_HOME`, else `~/.codex`): its `hooks.json`
+    /// takes the Codex hooks.
+    pub codex_home: PathBuf,
 }
 
 impl Paths {
@@ -35,7 +38,11 @@ impl Paths {
         };
         let config_file = state_dir.join("config");
         let cache_dir = dirs::cache_dir().unwrap_or_else(|| home.join(".cache")).join("clawdmeter");
-        Paths { home, state_dir, config_file, cache_dir }
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"));
+        Paths { home, state_dir, config_file, cache_dir, codex_home }
     }
 
     /// Everything under one root (tests, portable installs).
@@ -46,11 +53,13 @@ impl Paths {
             config_file: state_dir.join("config"),
             state_dir,
             cache_dir: root.join("cache"),
+            codex_home: root.join(".codex"),
         }
     }
 
     /// `events.log`, appended by the hook in event mode:
-    /// `<unix_ts> <HookEventName> <session_id>` per line.
+    /// `<unix_ts> <HookEventName> <session_id>` per line (see
+    /// [`crate::events::parse_line`]).
     pub fn events_log(&self) -> PathBuf {
         self.state_dir.join("events.log")
     }
@@ -114,6 +123,8 @@ mod tests {
         assert_eq!(p.events_log(), PathBuf::from("/t/state/events.log"));
         assert_eq!(p.config_file, PathBuf::from("/t/state/config"));
         assert_eq!(p.ble_address_file(), PathBuf::from("/t/state/ble-address"));
+        // Never the developer's real Codex home, whatever CODEX_HOME says.
+        assert_eq!(p.codex_home, PathBuf::from("/t/.codex"));
     }
 
     #[cfg(not(windows))]

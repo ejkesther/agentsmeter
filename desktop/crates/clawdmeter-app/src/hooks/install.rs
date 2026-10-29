@@ -1,8 +1,11 @@
-//! Wire `clawdmeter hook …` into each account's `settings.json`.
+//! Wire `clawdmeter hook …` into each account's `settings.json`, and into
+//! Codex's `hooks.json`.
 //!
 //! Claude Code reads `settings.json` per config dir, so this runs per
-//! account. It merges into existing hooks, produces before/after text for the
-//! diff view, keeps a `.bak`, and only touches entries it recognises:
+//! account; Codex reads `<codex home>/hooks.json`, which has the same
+//! `{"hooks": {event: [{matcher, hooks: [{type, command}]}]}}` layout. It
+//! merges into existing hooks, produces before/after text for the diff view,
+//! keeps a `.bak`, and only touches entries it recognises:
 //!
 //! * **ours**: `<path to a clawdmeter binary> hook <mode>`;
 //! * **legacy**: anything running `attention-hook.sh` (the old README's
@@ -14,6 +17,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub use clawdmeter_core::events::Agent;
 use serde_json::{json, Map, Value};
 
 /// The legacy shell hook's file name.
@@ -38,6 +42,34 @@ pub const HOOKS: [HookSpec; 5] = [
     HookSpec { event: "Notification", matcher: None, args: "alert event" },
     HookSpec { event: "PreToolUse", matcher: Some("AskUserQuestion"), args: "alert event" },
 ];
+
+/// Codex's four, by the same event names. Codex has no `Notification`:
+/// `PermissionRequest` alerts (the hook prints nothing, so Codex's own
+/// approval prompt still decides), and Stop also clears, as nothing else
+/// ends a wait there. `--agent codex` tags the events as Codex's.
+pub const CODEX_HOOKS: [HookSpec; 4] = [
+    HookSpec { event: "UserPromptSubmit", matcher: None, args: "clear event --agent codex" },
+    HookSpec { event: "PostToolUse", matcher: None, args: "clear event --agent codex" },
+    HookSpec { event: "Stop", matcher: None, args: "clear event --agent codex" },
+    HookSpec { event: "PermissionRequest", matcher: None, args: "alert event --agent codex" },
+];
+
+/// The hooks one agent gets.
+pub fn specs(agent: Agent) -> &'static [HookSpec] {
+    match agent {
+        Agent::Claude => &HOOKS,
+        Agent::Codex => &CODEX_HOOKS,
+    }
+}
+
+/// The file holding an agent's hooks: `<config dir>/settings.json` for
+/// Claude Code, `<codex home>/hooks.json` for Codex.
+pub fn hooks_file(dir: &Path, agent: Agent) -> PathBuf {
+    dir.join(match agent {
+        Agent::Claude => "settings.json",
+        Agent::Codex => "hooks.json",
+    })
+}
 
 /// The binary hooks should run: the path that outlives this process (an
 /// AppImage's copy under `state_dir`, a Nix profile's `bin/clawdmeter`,
@@ -167,7 +199,7 @@ fn is_managed(hook: &Value) -> bool {
     command_of(hook).is_some_and(|c| owner(c) != Owner::Foreign)
 }
 
-/// settings.json problems.
+/// settings.json (or hooks.json) problems.
 #[derive(Debug)]
 pub enum HookError {
     /// Not valid JSON (left untouched).
@@ -182,9 +214,9 @@ impl std::fmt::Display for HookError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HookError::Parse(_) => {
-                write!(f, "settings.json contains invalid JSON. Fix the file, then retry. Nothing was written.")
+                write!(f, "The file contains invalid JSON. Fix it, then retry. Nothing was written.")
             }
-            HookError::Shape(w) => write!(f, "Unsupported settings.json layout: {w}. Nothing was written."),
+            HookError::Shape(w) => write!(f, "Unsupported file layout: {w}. Nothing was written."),
             HookError::Io(e) => write!(f, "{}", crate::errors::io_message(e)),
         }
     }
@@ -214,14 +246,15 @@ fn render(root: Map<String, Value>) -> String {
     s
 }
 
-/// Merge our hooks into settings.json text (`None` = no file), pointing them
-/// at `exe`. Legacy and stale entries are rewritten in place; duplicates of
-/// ours are dropped; foreign hooks are untouched.
-pub fn merge(text: Option<&str>, exe: &Path) -> Result<String, HookError> {
+/// Merge `agent`'s hooks into settings.json (or hooks.json) text (`None` =
+/// no file), pointing them at `exe`. Legacy and stale entries are rewritten
+/// in place; duplicates of ours are dropped; foreign hooks are untouched.
+pub fn merge(text: Option<&str>, exe: &Path, agent: Agent) -> Result<String, HookError> {
+    let specs = specs(agent);
     let mut root = parse_root(text)?;
     let hooks = root.entry("hooks").or_insert_with(|| Value::Object(Map::new()));
     let hooks = hooks.as_object_mut().ok_or(HookError::Shape("\"hooks\" isn't an object"))?;
-    for spec in HOOKS {
+    for spec in specs {
         let cmd = hook_command(exe, spec.args);
         let list = hooks.entry(spec.event).or_insert_with(|| Value::Array(Vec::new()));
         let list = list.as_array_mut().ok_or(HookError::Shape("a hook event isn't a list"))?;
@@ -278,7 +311,7 @@ pub fn merge(text: Option<&str>, exe: &Path) -> Result<String, HookError> {
         }
     }
     // Legacy entries on events we no longer use.
-    strip_managed(hooks, |event| !HOOKS.iter().any(|s| s.event == event));
+    strip_managed(hooks, |event| !specs.iter().any(|s| s.event == event));
     Ok(render(root))
 }
 
@@ -317,7 +350,7 @@ pub fn remove(text: Option<&str>) -> Result<String, HookError> {
 pub enum HookStatus {
     /// None of our hooks.
     Missing,
-    /// All five, pointing at this binary.
+    /// All of them ([`specs`]), pointing at this binary.
     Installed,
     /// Uses the old `attention-hook.sh` script.
     Legacy,
@@ -336,8 +369,8 @@ impl HookStatus {
     }
 }
 
-/// Check a settings.json against [`HOOKS`] and `exe`.
-pub fn status(text: Option<&str>, exe: &Path) -> HookStatus {
+/// Check a settings.json (or hooks.json) against `agent`'s [`specs`] and `exe`.
+pub fn status(text: Option<&str>, exe: &Path, agent: Agent) -> HookStatus {
     let root = match parse_root(text) {
         Ok(r) => r,
         Err(e) => return HookStatus::Unreadable(e.to_string()),
@@ -368,7 +401,7 @@ pub fn status(text: Option<&str>, exe: &Path) -> HookStatus {
     {
         return HookStatus::Stale(other.clone());
     }
-    let complete = HOOKS.iter().all(|spec| {
+    let complete = specs(agent).iter().all(|spec| {
         hooks
             .and_then(|h| h.get(spec.event))
             .and_then(Value::as_array)
@@ -390,8 +423,8 @@ pub fn status(text: Option<&str>, exe: &Path) -> HookStatus {
 /// What a [`HookPlan`] does, so it can be redone on a file that changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookOp {
-    /// Install (or update) the hooks for this executable.
-    Install(PathBuf),
+    /// Install (or update) one agent's hooks for this executable.
+    Install(PathBuf, Agent),
     /// Remove them.
     Remove,
 }
@@ -399,16 +432,17 @@ pub enum HookOp {
 impl HookOp {
     fn run(&self, text: Option<&str>) -> Result<String, HookError> {
         match self {
-            HookOp::Install(exe) => merge(text, exe),
+            HookOp::Install(exe, agent) => merge(text, exe, *agent),
             HookOp::Remove => remove(text),
         }
     }
 }
 
-/// A pending change to one account's settings.json, for the diff view.
+/// A pending change to one account's settings.json (or Codex's hooks.json),
+/// for the diff view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookPlan {
-    /// `<config_dir>/settings.json`.
+    /// `<config_dir>/settings.json`, or `<codex home>/hooks.json`.
     pub path: PathBuf,
     /// Current text (`None` = no file).
     pub before: Option<String>,
@@ -431,8 +465,8 @@ impl HookPlan {
     /// Write it. The file is read again first: if Claude Code (or anyone)
     /// changed it since the preview, the same change is made to the new text,
     /// so their edits survive. The first file ever replaced is kept as
-    /// `settings.json.bak` (the settings from before Clawdmeter); later
-    /// writes leave that backup alone.
+    /// `settings.json.bak` / `hooks.json.bak` (the settings from before
+    /// Clawdmeter); later writes leave that backup alone.
     pub fn apply(&self) -> Result<(), HookError> {
         let now = read_opt(&self.path)?;
         let plan = if now == self.before {
@@ -471,28 +505,29 @@ fn read_opt(path: &Path) -> Result<Option<String>, HookError> {
     }
 }
 
-/// Plan installing (or updating) the hooks in one config dir.
-pub fn plan_install(config_dir: &Path, exe: &Path) -> Result<HookPlan, HookError> {
-    let path = config_dir.join("settings.json");
+/// Plan installing (or updating) `agent`'s hooks in one config dir (Codex:
+/// its home).
+pub fn plan_install(dir: &Path, exe: &Path, agent: Agent) -> Result<HookPlan, HookError> {
+    let path = hooks_file(dir, agent);
     let before = read_opt(&path)?;
-    let op = HookOp::Install(exe.to_owned());
+    let op = HookOp::Install(exe.to_owned(), agent);
     let after = op.run(before.as_deref())?;
     Ok(HookPlan { path, before, after, op })
 }
 
-/// Plan removing the hooks from one config dir.
-pub fn plan_uninstall(config_dir: &Path) -> Result<HookPlan, HookError> {
-    let path = config_dir.join("settings.json");
+/// Plan removing the hooks from one config dir (Codex: its home).
+pub fn plan_uninstall(dir: &Path, agent: Agent) -> Result<HookPlan, HookError> {
+    let path = hooks_file(dir, agent);
     let before = read_opt(&path)?;
     let op = HookOp::Remove;
     let after = op.run(before.as_deref())?;
     Ok(HookPlan { path, before, after, op })
 }
 
-/// Hook status of one config dir.
-pub fn dir_status(config_dir: &Path, exe: &Path) -> HookStatus {
-    match read_opt(&config_dir.join("settings.json")) {
-        Ok(t) => status(t.as_deref(), exe),
+/// Hook status of one config dir (Codex: its home).
+pub fn dir_status(dir: &Path, exe: &Path, agent: Agent) -> HookStatus {
+    match read_opt(&hooks_file(dir, agent)) {
+        Ok(t) => status(t.as_deref(), exe, agent),
         Err(e) => HookStatus::Unreadable(e.to_string()),
     }
 }
@@ -560,14 +595,14 @@ mod tests {
 
     #[test]
     fn fresh_install() {
-        let out = merge(None, exe()).unwrap();
+        let out = merge(None, exe(), Agent::Claude).unwrap();
         let j = v(&out);
         assert_eq!(j["hooks"]["Stop"][0]["hooks"][0]["command"], format!("{EXE} hook event"));
         assert_eq!(j["hooks"]["PreToolUse"][0]["matcher"], "AskUserQuestion");
         assert_eq!(j["hooks"]["PostToolUse"][0]["hooks"][0]["type"], "command");
-        assert_eq!(status(Some(&out), exe()), HookStatus::Installed);
-        assert_eq!(status(None, exe()), HookStatus::Missing);
-        assert_eq!(merge(Some(&out), exe()).unwrap(), out, "idempotent");
+        assert_eq!(status(Some(&out), exe(), Agent::Claude), HookStatus::Installed);
+        assert_eq!(status(None, exe(), Agent::Claude), HookStatus::Missing);
+        assert_eq!(merge(Some(&out), exe(), Agent::Claude).unwrap(), out, "idempotent");
     }
 
     #[test]
@@ -584,8 +619,8 @@ mod tests {
     "PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "/home/u/.config/claude-usage-monitor/attention-hook.sh alert event"}]}]
   }
 }"#;
-        assert_eq!(status(Some(before), exe()), HookStatus::Legacy);
-        let out = merge(Some(before), exe()).unwrap();
+        assert_eq!(status(Some(before), exe(), Agent::Claude), HookStatus::Legacy);
+        let out = merge(Some(before), exe(), Agent::Claude).unwrap();
         let j = v(&out);
         let keys: Vec<_> = j.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys, ["model", "hooks"]);
@@ -596,15 +631,15 @@ mod tests {
         assert_eq!(j["hooks"]["Notification"].as_array().unwrap().len(), 1);
         assert_eq!(j["hooks"]["PreToolUse"][0]["hooks"][0]["command"], format!("{EXE} hook alert event"));
         assert!(!out.contains(LEGACY_SCRIPT));
-        assert_eq!(status(Some(&out), exe()), HookStatus::Installed);
+        assert_eq!(status(Some(&out), exe(), Agent::Claude), HookStatus::Installed);
     }
 
     #[test]
     fn stale_paths_and_duplicates() {
-        let old = merge(None, Path::new("/old/place/clawdmeter")).unwrap();
-        assert_eq!(status(Some(&old), exe()), HookStatus::Stale("/old/place/clawdmeter".into()));
-        let fixed = merge(Some(&old), exe()).unwrap();
-        assert_eq!(status(Some(&fixed), exe()), HookStatus::Installed);
+        let old = merge(None, Path::new("/old/place/clawdmeter"), Agent::Claude).unwrap();
+        assert_eq!(status(Some(&old), exe(), Agent::Claude), HookStatus::Stale("/old/place/clawdmeter".into()));
+        let fixed = merge(Some(&old), exe(), Agent::Claude).unwrap();
+        assert_eq!(status(Some(&fixed), exe(), Agent::Claude), HookStatus::Installed);
         assert!(!fixed.contains("/old/place"));
         // Both a legacy and a current entry on one event: one survives.
         let dup = format!(
@@ -612,7 +647,7 @@ mod tests {
               {{"hooks": [{{"type": "command", "command": "/x/attention-hook.sh event"}}]}},
               {{"hooks": [{{"type": "command", "command": "{EXE} hook event"}}, {{"type": "command", "command": "say done"}}]}}]}}}}"#
         );
-        let j = v(&merge(Some(&dup), exe()).unwrap());
+        let j = v(&merge(Some(&dup), exe(), Agent::Claude).unwrap());
         let stop = j["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2);
         assert_eq!(stop[0]["hooks"][0]["command"], format!("{EXE} hook event"));
@@ -627,7 +662,7 @@ mod tests {
         let before = r#"{"hooks": {"PreToolUse": [{"hooks": [
             {"type": "command", "command": "audit-log"},
             {"type": "command", "command": "/x/attention-hook.sh alert"}]}]}}"#;
-        let j = v(&merge(Some(before), exe()).unwrap());
+        let j = v(&merge(Some(before), exe(), Agent::Claude).unwrap());
         let pre = j["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 2);
         assert!(pre[0].get("matcher").is_none());
@@ -641,7 +676,7 @@ mod tests {
         // Legacy clear alone in a "Bash" group: the group becomes catch-all.
         let alone = r#"{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command", "command": "/x/attention-hook.sh clear"}]}]}}"#;
-        let j = v(&merge(Some(alone), exe()).unwrap());
+        let j = v(&merge(Some(alone), exe(), Agent::Claude).unwrap());
         let post = j["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 1);
         assert!(post[0].get("matcher").is_none());
@@ -649,20 +684,20 @@ mod tests {
         let shared = r#"{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command", "command": "lint"},
             {"type": "command", "command": "/x/attention-hook.sh clear"}]}]}}"#;
-        assert_eq!(status(Some(shared), exe()), HookStatus::Legacy);
-        let out = merge(Some(shared), exe()).unwrap();
+        assert_eq!(status(Some(shared), exe(), Agent::Claude), HookStatus::Legacy);
+        let out = merge(Some(shared), exe(), Agent::Claude).unwrap();
         let j = v(&out);
         let post = j["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 2);
         assert_eq!(post[0]["matcher"], "Bash");
         assert_eq!(post[0]["hooks"].as_array().unwrap().len(), 1);
         assert!(post[1].get("matcher").is_none());
-        assert_eq!(status(Some(&out), exe()), HookStatus::Installed);
+        assert_eq!(status(Some(&out), exe(), Agent::Claude), HookStatus::Installed);
         // "*" counts as catch-all and is left alone.
         let star = format!(
             r#"{{"hooks": {{"Stop": [{{"matcher": "*", "hooks": [{{"type": "command", "command": "{EXE} hook event"}}]}}]}}}}"#
         );
-        assert_eq!(v(&merge(Some(&star), exe()).unwrap())["hooks"]["Stop"][0]["matcher"], "*");
+        assert_eq!(v(&merge(Some(&star), exe(), Agent::Claude).unwrap())["hooks"]["Stop"][0]["matcher"], "*");
     }
 
     #[test]
@@ -686,11 +721,11 @@ mod tests {
         let partial = format!(
             r#"{{"hooks": {{"Stop": [{{"hooks": [{{"type": "command", "command": "{EXE} hook event"}}]}}]}}}}"#
         );
-        assert_eq!(status(Some(&partial), exe()), HookStatus::Partial);
-        assert!(matches!(status(Some("{not json"), exe()), HookStatus::Unreadable(_)));
-        assert!(matches!(merge(Some("{not json"), exe()), Err(HookError::Parse(_))));
-        assert!(matches!(merge(Some("[]"), exe()), Err(HookError::Shape(_))));
-        assert!(matches!(merge(Some(r#"{"hooks": []}"#), exe()), Err(HookError::Shape(_))));
+        assert_eq!(status(Some(&partial), exe(), Agent::Claude), HookStatus::Partial);
+        assert!(matches!(status(Some("{not json"), exe(), Agent::Claude), HookStatus::Unreadable(_)));
+        assert!(matches!(merge(Some("{not json"), exe(), Agent::Claude), Err(HookError::Parse(_))));
+        assert!(matches!(merge(Some("[]"), exe(), Agent::Claude), Err(HookError::Shape(_))));
+        assert!(matches!(merge(Some(r#"{"hooks": []}"#), exe(), Agent::Claude), Err(HookError::Shape(_))));
     }
 
     #[test]
@@ -700,15 +735,15 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
         fs::write(&path, "{\"model\":\"opus\"}").unwrap();
-        let plan = plan_install(&dir, exe()).unwrap();
+        let plan = plan_install(&dir, exe(), Agent::Claude).unwrap();
         // Claude Code writes the file while the preview is open.
         fs::write(&path, "{\"model\":\"opus\",\"theme\":\"dark\"}").unwrap();
         plan.apply().unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["theme"], "dark");
-        assert_eq!(dir_status(&dir, exe()), HookStatus::Installed);
+        assert_eq!(dir_status(&dir, exe(), Agent::Claude), HookStatus::Installed);
         // Broken in the meantime: nothing is written.
-        let plan = plan_uninstall(&dir).unwrap();
+        let plan = plan_uninstall(&dir, Agent::Claude).unwrap();
         fs::write(&path, "{ not json").unwrap();
         assert!(matches!(plan.apply(), Err(HookError::Parse(_))));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
@@ -721,14 +756,14 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("settings.json"), "{\"model\":\"opus\"}").unwrap();
-        let plan = plan_install(&dir, exe()).unwrap();
+        let plan = plan_install(&dir, exe(), Agent::Claude).unwrap();
         assert!(plan.changes());
         plan.apply().unwrap();
         assert_eq!(fs::read_to_string(dir.join("settings.json.bak")).unwrap(), "{\"model\":\"opus\"}");
-        assert_eq!(dir_status(&dir, exe()), HookStatus::Installed);
-        assert!(!plan_install(&dir, exe()).unwrap().changes());
-        plan_uninstall(&dir).unwrap().apply().unwrap();
-        assert_eq!(dir_status(&dir, exe()), HookStatus::Missing);
+        assert_eq!(dir_status(&dir, exe(), Agent::Claude), HookStatus::Installed);
+        assert!(!plan_install(&dir, exe(), Agent::Claude).unwrap().changes());
+        plan_uninstall(&dir, Agent::Claude).unwrap().apply().unwrap();
+        assert_eq!(dir_status(&dir, exe(), Agent::Claude), HookStatus::Missing);
         assert_eq!(
             fs::read_to_string(dir.join("settings.json.bak")).unwrap(),
             "{\"model\":\"opus\"}",
@@ -740,10 +775,54 @@ mod tests {
             let real = dir.join("dotfiles-settings.json");
             fs::rename(dir.join("settings.json"), &real).unwrap();
             std::os::unix::fs::symlink(&real, dir.join("settings.json")).unwrap();
-            plan_install(&dir, exe()).unwrap().apply().unwrap();
+            plan_install(&dir, exe(), Agent::Claude).unwrap().apply().unwrap();
             assert!(fs::symlink_metadata(dir.join("settings.json")).unwrap().file_type().is_symlink());
-            assert_eq!(status(Some(&fs::read_to_string(&real).unwrap()), exe()), HookStatus::Installed);
+            assert_eq!(status(Some(&fs::read_to_string(&real).unwrap()), exe(), Agent::Claude), HookStatus::Installed);
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_hooks_json() {
+        // A user's own Codex hook (the docs' example) stays as it is.
+        let before = r#"{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "python3 .codex/hooks/check.py", "timeout": 30}]}]}}"#;
+        assert_eq!(status(Some(before), exe(), Agent::Codex), HookStatus::Missing);
+        let out = merge(Some(before), exe(), Agent::Codex).unwrap();
+        let j = v(&out);
+        let events: Vec<_> = j["hooks"].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(events, ["PreToolUse", "UserPromptSubmit", "PostToolUse", "Stop", "PermissionRequest"]);
+        assert_eq!(j["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 30);
+        let cmd = |event: &str| j["hooks"][event][0]["hooks"][0]["command"].as_str().unwrap().to_owned();
+        assert_eq!(cmd("PermissionRequest"), hook_command(exe(), "alert event --agent codex"));
+        assert_eq!(cmd("Stop"), hook_command(exe(), "clear event --agent codex"));
+        assert!(j["hooks"]["PermissionRequest"][0].get("matcher").is_none());
+        assert_eq!(status(Some(&out), exe(), Agent::Codex), HookStatus::Installed);
+        assert_eq!(merge(Some(&out), exe(), Agent::Codex).unwrap(), out, "idempotent");
+        // Codex hooks are ours too: removal leaves only the user's.
+        assert_eq!(v(&remove(Some(&out)).unwrap()), v(before));
+        // Claude Code's set written into hooks.json is incomplete for Codex,
+        // and the update replaces it (Notification included).
+        let claude = merge(None, exe(), Agent::Claude).unwrap();
+        assert_eq!(status(Some(&claude), exe(), Agent::Codex), HookStatus::Partial);
+        let fixed = v(&merge(Some(&claude), exe(), Agent::Codex).unwrap());
+        assert_eq!(fixed, v(&merge(None, exe(), Agent::Codex).unwrap()));
+    }
+
+    #[test]
+    fn codex_plan_writes_hooks_json() {
+        let home = std::env::temp_dir().join(format!("cm-hookcodex-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("hooks.json"), "{\"hooks\":{}}").unwrap();
+        let plan = plan_install(&home, exe(), Agent::Codex).unwrap();
+        assert_eq!(plan.path, home.join("hooks.json"));
+        plan.apply().unwrap();
+        assert_eq!(fs::read_to_string(home.join("hooks.json.bak")).unwrap(), "{\"hooks\":{}}");
+        assert_eq!(dir_status(&home, exe(), Agent::Codex), HookStatus::Installed);
+        assert!(!home.join("settings.json").exists(), "Claude Code's file isn't touched");
+        plan_uninstall(&home, Agent::Codex).unwrap().apply().unwrap();
+        assert_eq!(dir_status(&home, exe(), Agent::Codex), HookStatus::Missing);
+        let _ = fs::remove_dir_all(&home);
     }
 }

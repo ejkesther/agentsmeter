@@ -92,6 +92,12 @@ is saved as `settings.json.bak`; later changes keep that backup. Other hooks
 remain in place. On macOS, move Clawdmeter to Applications before setting up
 hooks or Start at login; on Windows, extract it from the zip first.
 
+If Codex is installed (`~/.codex`, or `$CODEX_HOME`), the page also lists
+its `hooks.json`. Codex's hooks make Clawd react to Codex sessions too, and
+a Codex permission prompt alerts like Claude Code's. They don't change how
+often Claude usage is polled. Codex runs new or changed hooks only after you
+trust them: type `/hooks` in Codex once after installing or updating them.
+
 Hooks let Clawd react to activity and show alerts. The local event log
 contains timestamps, event types, and session IDs. Alerts also store the
 notification message or the first question from `AskUserQuestion`, which

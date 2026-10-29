@@ -41,7 +41,8 @@ is faked behind `FlashHardware`.
 - `clawdmeter-app`: the `clawdmeter` binary. Tray (`tray/`, ksni on Linux),
   window (`ui/`), `daemon.rs` (drives the engine on its own thread: 0.5 s
   tick, config re-read every 5 s), `hooks/` (`clawdmeter hook
-  alert|clear|event` and the settings.json installer), `ipc.rs`
+  alert|clear|event [--agent codex]` and the installer for each account's
+  settings.json and Codex's `<codex home>/hooks.json`), `ipc.rs`
   (single-instance lock, status file, command queues, window lock),
   `onboarding.rs`, `boards.rs` (names, buy links, illustrations), `chime.rs`.
 
@@ -75,6 +76,20 @@ is faked behind `FlashHardware`.
   keeps `$APPIMAGE`. Installs refuse paths that won't survive (macOS disk
   image or AppTranslocation, Windows temp/zip folders), and existing entries
   pointing there show as stale.
+
+## Codex hooks
+
+- Codex reads `$CODEX_HOME/hooks.json` (default `~/.codex`; `Paths::codex_home`)
+  with Claude Code's layout and input fields. The Hooks page lists it when
+  that folder exists and installs `CODEX_HOOKS`: UserPromptSubmit,
+  PostToolUse and Stop `clear event`, PermissionRequest `alert event`, all
+  `--agent codex`. Codex skips new or changed hooks until trusted in `/hooks`.
+- The hook logs those as `codex:<event>`, with the Codex home (from
+  `transcript_path`'s `sessions/`) as the account. `HookEvent::agent` keeps
+  them apart: they drive `a`/`e`/`n` (`Engine::activity`), never the
+  `/usage` cadence or window inference (`claude_activity`, attribution).
+- On Windows Codex runs hooks as `cmd.exe /C "<command>"`; the quoted
+  forward-slash exe path works there as it does in Git Bash.
 
 ## Usage sources
 

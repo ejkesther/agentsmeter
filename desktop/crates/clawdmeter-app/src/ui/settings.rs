@@ -24,14 +24,24 @@ use super::widgets::{
 use super::{command, live_status, not_running_text, run_blocking, Navigate, REFRESH};
 use crate::diff::{line_diff, with_context, DiffLine};
 use crate::errors;
-use crate::hooks::install::{self as hooks, HookPlan, HookStatus, HOOKS};
+use crate::hooks::install::{self as hooks, Agent, HookPlan, HookStatus};
 use crate::ipc::{self, AppCommand, FirmwareRecord, StatusSnapshot};
 use crate::tilde;
 use crate::{boards, Page};
 
+/// One file the Hooks page manages: an account's settings.json, or Codex's
+/// hooks.json.
 struct HookRow {
+    /// The config dir, or Codex's home.
     dir: PathBuf,
+    agent: Agent,
     status: HookStatus,
+}
+
+impl HookRow {
+    fn target(&self) -> (PathBuf, Agent) {
+        (self.dir.clone(), self.agent)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,6 +53,22 @@ enum HookAction {
 struct HookPreview {
     action: HookAction,
     plans: Vec<HookPlan>,
+}
+
+/// Codex skips new or changed hooks until the user trusts them.
+const CODEX_TRUST: &str = "Codex runs them once you trust them: type /hooks in Codex.";
+
+/// "Your original settings are kept in settings.json.bak." for the files
+/// `plans` replace; `None` when every one is new.
+fn backups_kept(plans: &[HookPlan]) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+    for plan in plans.iter().filter(|p| p.before.is_some()) {
+        let name = plan.path.file_name().map_or_else(String::new, |n| format!("{}.bak", n.to_string_lossy()));
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    (!names.is_empty()).then(|| format!("Your original settings are kept in {}.", names.join(" and ")))
 }
 
 /// How long "Sent" stays on the test alert button.
@@ -177,9 +203,14 @@ impl SettingsView {
     /// Open the review of installing hooks in every account that needs them
     /// (what the page's install button does).
     pub fn review_hook_install(&mut self, cx: &mut Context<Self>) {
-        let pending = self.hooks.iter().filter(|h| h.status.needs_install()).map(|h| h.dir.clone()).collect();
+        let pending = self.hooks.iter().filter(|h| h.status.needs_install()).map(HookRow::target).collect();
         self.plan_hooks(HookAction::Install, pending);
         cx.notify();
+    }
+
+    /// The page lists Codex (its home exists).
+    pub fn lists_codex(&self) -> bool {
+        self.hooks.iter().any(|h| h.agent == Agent::Codex)
     }
 
     /// Open or close the Settings page's Advanced section.
@@ -193,7 +224,8 @@ impl SettingsView {
         self.hooks.iter().filter(|h| matches!(h.status, HookStatus::Unreadable(_))).count()
     }
 
-    /// Accounts the hooks page lists (every configured account).
+    /// Accounts the hooks page lists (every configured account, plus Codex
+    /// when it is installed).
     pub fn hook_accounts(&self) -> usize {
         self.hooks.len()
     }
@@ -216,14 +248,20 @@ impl SettingsView {
                 ))
             }
         }
+        // Codex gets a row once it is installed (its home exists); the
+        // installer never creates that folder.
+        let codex = Some(&self.paths.codex_home).filter(|h| h.is_dir()).map(|h| (h, Agent::Codex));
         self.hooks = self
             .settings
             .config_dirs
             .iter()
-            .map(|d| HookRow {
+            .map(|d| (d, Agent::Claude))
+            .chain(codex)
+            .map(|(d, agent)| HookRow {
                 dir: d.clone(),
+                agent,
                 status: match &self.hook_exe {
-                    Some(exe) => hooks::dir_status(d, exe),
+                    Some(exe) => hooks::dir_status(d, exe, agent),
                     None => HookStatus::Unreadable("Couldn't locate the Clawdmeter executable.".into()),
                 },
             })
@@ -356,7 +394,7 @@ impl SettingsView {
         }
     }
 
-    fn plan_hooks(&mut self, action: HookAction, dirs: Vec<PathBuf>) {
+    fn plan_hooks(&mut self, action: HookAction, targets: Vec<(PathBuf, Agent)>) {
         self.hook_msg = None;
         let exe = match (action, self.launchable(true)) {
             (_, Ok(exe)) => exe,
@@ -371,16 +409,16 @@ impl SettingsView {
             },
         };
         let mut plans = Vec::new();
-        for d in dirs {
+        for (d, agent) in targets {
             let plan = match action {
-                HookAction::Install => hooks::plan_install(&d, &exe),
-                HookAction::Remove => hooks::plan_uninstall(&d),
+                HookAction::Install => hooks::plan_install(&d, &exe, agent),
+                HookAction::Remove => hooks::plan_uninstall(&d, agent),
             };
             match plan {
                 Ok(p) if p.changes() => plans.push(p),
                 Ok(_) => {}
                 Err(e) => {
-                    let f = tilde(&d.join("settings.json").display().to_string(), &self.paths.home);
+                    let f = tilde(&hooks::hooks_file(&d, agent).display().to_string(), &self.paths.home);
                     self.hook_msg = Some((Tone::Bad, format!("{f}: {e}")));
                     return;
                 }
@@ -412,17 +450,13 @@ impl SettingsView {
             done += 1;
         }
         let accounts = if done == 1 { "1 account".to_string() } else { format!("{done} accounts") };
-        self.hook_msg = Some((
-            Tone::Ok,
-            match p.action {
-                HookAction::Install => {
-                    format!("Hooks installed in {accounts}. Your original settings are kept in settings.json.bak.")
-                }
-                HookAction::Remove => {
-                    format!("Hooks removed from {accounts}. Your original settings are kept in settings.json.bak.")
-                }
-            },
-        ));
+        let what = match p.action {
+            HookAction::Install => format!("Hooks installed in {accounts}."),
+            HookAction::Remove => format!("Hooks removed from {accounts}."),
+        };
+        let codex = p.plans.iter().any(|plan| matches!(plan.op, hooks::HookOp::Install(_, Agent::Codex)));
+        let msg = [Some(what), backups_kept(&p.plans), codex.then(|| CODEX_TRUST.to_owned())];
+        self.hook_msg = Some((Tone::Ok, msg.into_iter().flatten().collect::<Vec<_>>().join(" ")));
         self.reload();
     }
 
@@ -818,7 +852,12 @@ impl SettingsView {
         for (i, row) in self.hooks.iter().enumerate() {
             let (meta, chip, action): (String, (&str, Tone), Option<(&str, HookAction)>) = match &row.status {
                 HookStatus::Installed => (
-                    format!("{} hooks installed", HOOKS.len()),
+                    match row.agent {
+                        Agent::Claude => format!("{} hooks installed", hooks::specs(row.agent).len()),
+                        Agent::Codex => {
+                            format!("{} Codex hooks installed. {CODEX_TRUST}", hooks::specs(row.agent).len())
+                        }
+                    },
                     ("Installed", Tone::Ok),
                     Some(("Review removal", HookAction::Remove)),
                 ),
@@ -864,20 +903,17 @@ impl SettingsView {
                         .flex_1()
                         .min_w_0()
                         .gap(px(3.))
-                        .child(
-                            div()
-                                .font_family(FONT_MONO)
-                                .text_size(px(13.))
-                                .truncate()
-                                .child(tilde(&row.dir.join("settings.json").display().to_string(), &self.paths.home)),
-                        )
+                        .child(div().font_family(FONT_MONO).text_size(px(13.)).truncate().child(tilde(
+                            &hooks::hooks_file(&row.dir, row.agent).display().to_string(),
+                            &self.paths.home,
+                        )))
                         .child(div().text_size(px(12.5)).text_color(t.mute).child(meta)),
                 )
                 .child(pill(t, chip.0, chip.1));
             let action = action.filter(|(_, a)| !(single && *a == HookAction::Install));
             if let Some((label, action)) = action {
                 let me = cx.entity().downgrade();
-                let dir = row.dir.clone();
+                let target = row.target();
                 r = r.child(button(
                     t,
                     SharedString::from(format!("hook-{i}")),
@@ -885,9 +921,9 @@ impl SettingsView {
                     ButtonKind::Small,
                     !busy,
                     move |_, _, cx| {
-                        let dir = dir.clone();
+                        let target = target.clone();
                         let _ = me.update(cx, |v, cx| {
-                            v.plan_hooks(action, vec![dir]);
+                            v.plan_hooks(action, vec![target]);
                             cx.notify();
                         });
                     },
@@ -929,8 +965,8 @@ impl SettingsView {
                         });
                     })),
             );
-            pane =
-                pane.child(caption(t, "Review before applying. Your original settings are kept in settings.json.bak."));
+            let kept = backups_kept(&p.plans).map_or_else(String::new, |k| format!(" {k}"));
+            pane = pane.child(caption(t, format!("Review before applying.{kept}")));
             for plan in &p.plans {
                 // Diff what changes, not how the file was formatted: compare
                 // against the old file pretty-printed the way it will be saved.
@@ -977,8 +1013,8 @@ impl SettingsView {
                 pane = pane.child(div().flex().flex_col().gap(px(6.)).child(caption(t, what)).child(block));
             }
         } else {
-            let pending: Vec<PathBuf> =
-                self.hooks.iter().filter(|h| h.status.needs_install()).map(|h| h.dir.clone()).collect();
+            let pending: Vec<(PathBuf, Agent)> =
+                self.hooks.iter().filter(|h| h.status.needs_install()).map(HookRow::target).collect();
             let any_old = self.hooks.iter().any(|h| h.status.needs_install() && h.status != HookStatus::Missing);
             let me1 = cx.entity().downgrade();
             let n = pending.len();
@@ -1451,6 +1487,35 @@ mod tests {
         view.read_with(cx, |v, _| {
             assert_eq!(v.hooks[0].status, HookStatus::Installed);
             assert!(v.preview.is_none());
+        });
+        let _ = std::fs::remove_dir_all(&paths.home);
+    }
+
+    #[gpui::test]
+    fn codex_row_once_codex_is_installed(cx: &mut TestAppContext) {
+        let paths = home("codex");
+        let p = paths.clone();
+        let (view, cx) = cx.add_window_view(move |_, cx| SettingsView::with_usb(p, Page::Hooks, false, cx));
+        view.read_with(cx, |v, _| assert!(!v.lists_codex(), "no Codex home, no row"));
+        assert!(!paths.codex_home.exists());
+
+        std::fs::create_dir_all(&paths.codex_home).unwrap();
+        view.update(cx, |v, cx| v.show(Page::Hooks, false, cx));
+        view.read_with(cx, |v, _| {
+            assert_eq!((v.hook_accounts(), v.pending_hooks()), (2, 2));
+            assert_eq!(v.hooks[1].agent, Agent::Codex);
+        });
+        click(cx, "install-all");
+        click(cx, "apply-hooks");
+        let codex = std::fs::read_to_string(paths.codex_home.join("hooks.json")).unwrap();
+        assert!(codex.contains("PermissionRequest") && codex.contains(" hook alert event --agent codex"), "{codex}");
+        assert!(!codex.contains("Notification"), "{codex}");
+        let claude = std::fs::read_to_string(paths.home.join("acct/settings.json")).unwrap();
+        assert!(!claude.contains("--agent"), "{claude}");
+        view.read_with(cx, |v, _| {
+            assert_eq!(v.installed_hooks(), 2);
+            let msg = &v.hook_msg.as_ref().unwrap().1;
+            assert_eq!(msg, &format!("Hooks installed in 2 accounts. {CODEX_TRUST}"), "both files were new: no .bak");
         });
         let _ = std::fs::remove_dir_all(&paths.home);
     }
