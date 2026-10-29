@@ -54,20 +54,31 @@ pub const CODEX_HOOKS: [HookSpec; 4] = [
     HookSpec { event: "PermissionRequest", matcher: None, args: "alert event --agent codex" },
 ];
 
+/// Cursor's three, by its camelCase names: a prompt, a finished tool and the
+/// end of a turn. Cursor has no permission-request event, so it doesn't
+/// alert. The hook answers each with an empty JSON reply (`cursor_reply`).
+pub const CURSOR_HOOKS: [HookSpec; 3] = [
+    HookSpec { event: "beforeSubmitPrompt", matcher: None, args: "event --agent cursor" },
+    HookSpec { event: "postToolUse", matcher: None, args: "event --agent cursor" },
+    HookSpec { event: "stop", matcher: None, args: "event --agent cursor" },
+];
+
 /// The hooks one agent gets.
 pub fn specs(agent: Agent) -> &'static [HookSpec] {
     match agent {
         Agent::Claude => &HOOKS,
         Agent::Codex => &CODEX_HOOKS,
+        Agent::Cursor => &CURSOR_HOOKS,
     }
 }
 
 /// The file holding an agent's hooks: `<config dir>/settings.json` for
-/// Claude Code, `<codex home>/hooks.json` for Codex.
+/// Claude Code, `<codex home>/hooks.json` for Codex, `~/.cursor/hooks.json`
+/// for Cursor.
 pub fn hooks_file(dir: &Path, agent: Agent) -> PathBuf {
     dir.join(match agent {
         Agent::Claude => "settings.json",
-        Agent::Codex => "hooks.json",
+        Agent::Codex | Agent::Cursor => "hooks.json",
     })
 }
 
@@ -83,6 +94,17 @@ pub fn hook_binary(state_dir: &Path) -> io::Result<PathBuf> {
 /// single-quoted when they hold anything a shell would interpret.
 pub fn hook_command(exe: &Path, args: &str) -> String {
     format!("{} hook {args}", quote_exe(exe))
+}
+
+/// [`hook_command`] as `agent` runs it: Cursor runs hooks through PowerShell
+/// on Windows, which calls a quoted path only after `&`.
+pub fn agent_hook_command(exe: &Path, args: &str, agent: Agent) -> String {
+    let cmd = hook_command(exe, args);
+    if cfg!(windows) && agent == Agent::Cursor {
+        format!("& {cmd}")
+    } else {
+        cmd
+    }
 }
 
 fn quote_exe(exe: &Path) -> String {
@@ -171,6 +193,8 @@ pub fn owner(cmd: &str) -> Owner {
     if is_legacy(cmd) {
         return Owner::Legacy;
     }
+    // Cursor's PowerShell form: `& "<exe>" hook …`.
+    let cmd = cmd.trim_start().strip_prefix("& ").unwrap_or(cmd);
     let Some((exe, rest)) = first_word(cmd) else { return Owner::Foreign };
     let mut words = rest.split_whitespace();
     if words.next() != Some("hook") {
@@ -197,6 +221,15 @@ fn group_matcher(group: &Value) -> Option<&str> {
 
 fn is_managed(hook: &Value) -> bool {
     command_of(hook).is_some_and(|c| owner(c) != Owner::Foreign)
+}
+
+/// The hook objects in one event-list entry: a group's `hooks` (Claude Code,
+/// Codex), or the entry itself (Cursor's lists are flat).
+fn hook_entries(entry: &Value) -> Vec<&Value> {
+    match entry.get("hooks").and_then(Value::as_array) {
+        Some(hs) => hs.iter().collect(),
+        None => vec![entry],
+    }
 }
 
 /// settings.json (or hooks.json) problems.
@@ -252,6 +285,10 @@ fn render(root: Map<String, Value>) -> String {
 pub fn merge(text: Option<&str>, exe: &Path, agent: Agent) -> Result<String, HookError> {
     let specs = specs(agent);
     let mut root = parse_root(text)?;
+    if agent == Agent::Cursor {
+        merge_flat(&mut root, exe, agent)?;
+        return Ok(render(root));
+    }
     let hooks = root.entry("hooks").or_insert_with(|| Value::Object(Map::new()));
     let hooks = hooks.as_object_mut().ok_or(HookError::Shape("\"hooks\" isn't an object"))?;
     for spec in specs {
@@ -315,6 +352,47 @@ pub fn merge(text: Option<&str>, exe: &Path, agent: Agent) -> Result<String, Hoo
     Ok(render(root))
 }
 
+/// [`merge`] for Cursor's `hooks.json`: `{"version": 1, "hooks": {event:
+/// [{command, matcher?, timeout?}]}}`, one hook per list entry, no groups.
+fn merge_flat(root: &mut Map<String, Value>, exe: &Path, agent: Agent) -> Result<(), HookError> {
+    root.entry("version").or_insert(json!(1));
+    let hooks = root.entry("hooks").or_insert_with(|| Value::Object(Map::new()));
+    let hooks = hooks.as_object_mut().ok_or(HookError::Shape("\"hooks\" isn't an object"))?;
+    let specs = specs(agent);
+    for spec in specs {
+        let cmd = agent_hook_command(exe, spec.args, agent);
+        let list = hooks.entry(spec.event).or_insert_with(|| Value::Array(Vec::new()));
+        let list = list.as_array_mut().ok_or(HookError::Shape("a hook event isn't a list"))?;
+        let mut placed = false;
+        list.retain_mut(|h| {
+            if !is_managed(h) {
+                return true;
+            }
+            if placed {
+                return false;
+            }
+            placed = true;
+            let h = h.as_object_mut().expect("has a command, so an object");
+            h.insert("command".into(), Value::String(cmd.clone()));
+            match spec.matcher {
+                Some(m) => h.insert("matcher".into(), Value::String(m.to_owned())),
+                None => h.remove("matcher"),
+            };
+            true
+        });
+        if !placed {
+            let mut h = Map::new();
+            h.insert("command".into(), Value::String(cmd));
+            if let Some(m) = spec.matcher {
+                h.insert("matcher".into(), Value::String(m.to_owned()));
+            }
+            list.push(Value::Object(h));
+        }
+    }
+    strip_managed(hooks, |event| !specs.iter().any(|s| s.event == event));
+    Ok(())
+}
+
 fn strip_managed(hooks: &mut Map<String, Value>, which: impl Fn(&str) -> bool) {
     for (event, list) in hooks.iter_mut() {
         if !which(event) {
@@ -326,7 +404,11 @@ fn strip_managed(hooks: &mut Map<String, Value>, which: impl Fn(&str) -> bool) {
                     hs.retain(|h| !is_managed(h));
                 }
             }
-            groups.retain(|g| g.get("hooks").and_then(Value::as_array).is_none_or(|hs| !hs.is_empty()));
+            // Emptied groups go, and so do Cursor's flat entries that are ours.
+            groups.retain(|g| match g.get("hooks").and_then(Value::as_array) {
+                Some(hs) => !hs.is_empty(),
+                None => !is_managed(g),
+            });
         }
     }
     hooks.retain(|_, v| v.as_array().is_none_or(|a| !a.is_empty()));
@@ -381,8 +463,7 @@ pub fn status(text: Option<&str>, exe: &Path, agent: Agent) -> HookStatus {
         .flat_map(|h| h.values())
         .filter_map(Value::as_array)
         .flatten()
-        .filter_map(|g| g.get("hooks").and_then(Value::as_array))
-        .flatten()
+        .flat_map(hook_entries)
         .filter_map(command_of)
         .map(owner)
         .filter(|o| *o != Owner::Foreign)
@@ -408,8 +489,7 @@ pub fn status(text: Option<&str>, exe: &Path, agent: Agent) -> HookStatus {
             .into_iter()
             .flatten()
             .filter(|g| group_matcher(g) == spec.matcher)
-            .filter_map(|g| g.get("hooks").and_then(Value::as_array))
-            .flatten()
+            .flat_map(hook_entries)
             .filter_map(command_of)
             .any(|c| matches!(owner(c), Owner::Ours { args, .. } if args == spec.args))
     });
@@ -824,5 +904,55 @@ mod tests {
         plan_uninstall(&home, Agent::Codex).unwrap().apply().unwrap();
         assert_eq!(dir_status(&home, exe(), Agent::Codex), HookStatus::Missing);
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn cursor_hooks_json() {
+        // The user's own Cursor hooks (the docs' examples) stay as they are.
+        let before = r#"{"version": 1, "hooks": {
+            "beforeShellExecution": [{"command": ".cursor/hooks/approve-network.sh", "timeout": 30, "matcher": "curl|wget|nc "}],
+            "stop": [{"command": ".cursor/hooks/audit.sh", "loop_limit": 10}]}}"#;
+        assert_eq!(status(Some(before), exe(), Agent::Cursor), HookStatus::Missing);
+        let out = merge(Some(before), exe(), Agent::Cursor).unwrap();
+        let j = v(&out);
+        assert_eq!(j["version"], 1);
+        let events: Vec<_> = j["hooks"].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(events, ["beforeShellExecution", "stop", "beforeSubmitPrompt", "postToolUse"]);
+        // Flat: one hook per entry, no groups; theirs first.
+        let ours = agent_hook_command(exe(), "event --agent cursor", Agent::Cursor);
+        let stop = j["hooks"]["stop"].as_array().unwrap();
+        assert_eq!((stop.len(), &stop[0]["loop_limit"], &stop[1]["command"]), (2, &json!(10), &json!(ours)));
+        assert!(stop[1].get("hooks").is_none() && stop[1].get("type").is_none());
+        assert_eq!(status(Some(&out), exe(), Agent::Cursor), HookStatus::Installed);
+        assert_eq!(merge(Some(&out), exe(), Agent::Cursor).unwrap(), out, "idempotent");
+        // A new file gets a version; removal leaves only the user's hooks.
+        let fresh = v(&merge(None, exe(), Agent::Cursor).unwrap());
+        assert_eq!((&fresh["version"], &fresh["hooks"]["beforeSubmitPrompt"][0]["command"]), (&json!(1), &json!(ours)));
+        assert_eq!(v(&remove(Some(&out)).unwrap()), v(before));
+        // Another binary's entries are rewritten in place.
+        let old = merge(None, Path::new("/old/clawdmeter"), Agent::Cursor).unwrap();
+        assert_eq!(status(Some(&old), exe(), Agent::Cursor), HookStatus::Stale("/old/clawdmeter".into()));
+        assert_eq!(v(&merge(Some(&old), exe(), Agent::Cursor).unwrap()), fresh);
+        // Claude Code's grouped layout is no Cursor install.
+        assert_eq!(
+            status(Some(&merge(None, exe(), Agent::Claude).unwrap()), exe(), Agent::Cursor),
+            HookStatus::Partial
+        );
+    }
+
+    #[test]
+    fn powershell_call_is_ours() {
+        assert_eq!(
+            owner("& \"C:/Program Files/Clawdmeter/clawdmeter.exe\" hook event --agent cursor"),
+            Owner::Ours {
+                exe: "C:/Program Files/Clawdmeter/clawdmeter.exe".into(),
+                args: "event --agent cursor".into()
+            }
+        );
+        assert_eq!(owner("& \"C:/tools/other.exe\" hook event"), Owner::Foreign);
+        // On Windows Cursor runs hooks through PowerShell: `&` before the path.
+        let cmd = agent_hook_command(Path::new(EXE), "event --agent cursor", Agent::Cursor);
+        assert_eq!(cmd.starts_with("& "), cfg!(windows), "{cmd}");
+        assert!(!agent_hook_command(Path::new(EXE), "event", Agent::Codex).starts_with('&'));
     }
 }

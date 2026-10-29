@@ -208,9 +208,9 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// The page lists Codex (its home exists).
-    pub fn lists_codex(&self) -> bool {
-        self.hooks.iter().any(|h| h.agent == Agent::Codex)
+    /// The page lists this agent (for Codex and Cursor: its folder exists).
+    pub fn lists(&self, agent: Agent) -> bool {
+        self.hooks.iter().any(|h| h.agent == agent)
     }
 
     /// Open or close the Settings page's Advanced section.
@@ -248,15 +248,16 @@ impl SettingsView {
                 ))
             }
         }
-        // Codex gets a row once it is installed (its home exists); the
-        // installer never creates that folder.
-        let codex = Some(&self.paths.codex_home).filter(|h| h.is_dir()).map(|h| (h, Agent::Codex));
+        // Codex and Cursor get a row once installed (their folder exists);
+        // the installer never creates those folders.
+        let others = [(&self.paths.codex_home, Agent::Codex), (&self.paths.cursor_home, Agent::Cursor)];
+        let others = others.into_iter().filter(|(h, _)| h.is_dir());
         self.hooks = self
             .settings
             .config_dirs
             .iter()
             .map(|d| (d, Agent::Claude))
-            .chain(codex)
+            .chain(others)
             .map(|(d, agent)| HookRow {
                 dir: d.clone(),
                 agent,
@@ -896,6 +897,10 @@ impl SettingsView {
                         Agent::Codex => {
                             format!("{} Codex hooks installed. {CODEX_TRUST}", hooks::specs(row.agent).len())
                         }
+                        Agent::Cursor => format!(
+                            "{} Cursor hooks installed. Cursor has no permission event, so it doesn't alert.",
+                            hooks::specs(row.agent).len()
+                        ),
                     },
                     ("Installed", Tone::Ok),
                     Some(("Review removal", HookAction::Remove)),
@@ -1535,7 +1540,7 @@ mod tests {
         let paths = home("codex");
         let p = paths.clone();
         let (view, cx) = cx.add_window_view(move |_, cx| SettingsView::with_usb(p, Page::Hooks, false, cx));
-        view.read_with(cx, |v, _| assert!(!v.lists_codex(), "no Codex home, no row"));
+        view.read_with(cx, |v, _| assert!(!v.lists(Agent::Codex), "no Codex home, no row"));
         assert!(!paths.codex_home.exists());
 
         std::fs::create_dir_all(&paths.codex_home).unwrap();
@@ -1555,6 +1560,32 @@ mod tests {
             assert_eq!(v.installed_hooks(), 2);
             let msg = &v.hook_msg.as_ref().unwrap().1;
             assert_eq!(msg, &format!("Hooks installed in 2 accounts. {CODEX_TRUST}"), "both files were new: no .bak");
+        });
+        let _ = std::fs::remove_dir_all(&paths.home);
+    }
+
+    #[gpui::test]
+    fn cursor_row_once_cursor_is_installed(cx: &mut TestAppContext) {
+        let paths = home("cursor");
+        std::fs::create_dir_all(&paths.cursor_home).unwrap();
+        std::fs::write(paths.cursor_home.join("hooks.json"), r#"{"version":1,"hooks":{}}"#).unwrap();
+        let p = paths.clone();
+        let (view, cx) = cx.add_window_view(move |_, cx| SettingsView::with_usb(p, Page::Hooks, false, cx));
+        view.read_with(cx, |v, _| {
+            assert!(v.lists(Agent::Cursor) && !v.lists(Agent::Codex));
+            assert_eq!(v.hooks[1].agent, Agent::Cursor);
+        });
+        click(cx, "install-all");
+        click(cx, "apply-hooks");
+        let file = std::fs::read_to_string(paths.cursor_home.join("hooks.json")).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&file).unwrap();
+        assert_eq!(j["version"], 1);
+        let cmd = j["hooks"]["beforeSubmitPrompt"][0]["command"].as_str().unwrap();
+        assert!(cmd.ends_with(" hook event --agent cursor"), "{cmd}");
+        assert!(std::fs::read_to_string(paths.cursor_home.join("hooks.json.bak")).is_ok(), "the old file is kept");
+        view.read_with(cx, |v, _| {
+            assert_eq!(v.installed_hooks(), 2);
+            assert!(!v.hook_msg.as_ref().unwrap().1.contains("/hooks"), "no Codex trust step for Cursor");
         });
         let _ = std::fs::remove_dir_all(&paths.home);
     }

@@ -98,6 +98,13 @@ a Codex permission prompt alerts like Claude Code's. They don't change how
 often Claude usage is polled. Codex runs new or changed hooks only after you
 trust them: type `/hooks` in Codex once after installing or updating them.
 
+If Cursor is installed (`~/.cursor`), the page lists its `hooks.json` too.
+Cursor's hooks make Clawd react to Cursor's agent: prompts, tool use and
+finished turns. Cursor has no event for a permission prompt, so it doesn't
+alert, and its usage isn't shown yet. Cursor picks up the hooks as soon as
+they're saved. On Windows, a Cursor started from Git Bash runs no hooks at
+all (a known Cursor issue); start it from the Start menu instead.
+
 Codex's usage needs no hooks: Clawdmeter reads the 5-hour and weekly limits
 Codex saves in its session logs, about once a minute and right after a Codex
 turn ends. That sends nothing over the network. The **Accounts** page lists

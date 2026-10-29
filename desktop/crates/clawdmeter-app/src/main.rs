@@ -32,7 +32,7 @@ OPTIONS:
     --info PORT       Ask the firmware on PORT for its env/version
     hook MODE [event] Claude Code hook (MODE: alert, clear or event); reads the
                       hook JSON on stdin, prints nothing, always exits 0
-      [--agent codex] the same hook, run by Codex
+      [--agent codex|cursor]  the same hook, run by Codex or Cursor
     -V, --version
     -h, --help
 

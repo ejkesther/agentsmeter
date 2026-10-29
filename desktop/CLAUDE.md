@@ -49,8 +49,8 @@ is faked behind `FlashHardware`.
 - `clawdmeter-app`: the `clawdmeter` binary. Tray (`tray/`, ksni on Linux),
   window (`ui/`), `daemon.rs` (drives the engine on its own thread: 0.5 s
   tick, config re-read every 5 s), `hooks/` (`clawdmeter hook
-  alert|clear|event [--agent codex]` and the installer for each account's
-  settings.json and Codex's `<codex home>/hooks.json`), `ipc.rs`
+  alert|clear|event [--agent codex|cursor]` and the installer for each
+  account's settings.json and Codex's and Cursor's `hooks.json`), `ipc.rs`
   (single-instance lock, status file, command queues, window lock),
   `onboarding.rs`, `boards.rs` (names, buy links, illustrations), `chime.rs`.
 
@@ -109,6 +109,23 @@ is faked behind `FlashHardware`.
 - The selector picks among Claude accounts and Codex; `claude_active` (the
   same choice among Claude accounts alone) is what the `/usage` cadence
   treats as shown, so a Claude prompt still polls while Codex is on the device.
+
+## Cursor
+
+- Hooks only (Clawd reacts; no usage, no alerts: Cursor has no
+  permission-request event). `~/.cursor/hooks.json` (`Paths::cursor_home`)
+  is flat, `{"version": 1, "hooks": {event: [{command, matcher?}]}}`, so
+  `merge` has its own branch (`merge_flat`); status and removal read both
+  layouts (`hook_entries`). `CURSOR_HOOKS`: beforeSubmitPrompt, postToolUse,
+  stop, all `event --agent cursor`, logged as `cursor:<name>` and mapped by
+  `HookKind::parse_for`. The session is `conversation_id`.
+- Cursor reads JSON from the hook, so with `--agent cursor` it prints
+  `cursor_reply` (`{"continue":true}` for a prompt, else `{}`); other agents
+  get nothing on stdout.
+- On Windows Cursor pipes the payload through PowerShell (`Get-Content -Raw
+  | <command>`), so the command is `& "<exe>" hook …` (`agent_hook_command`;
+  `owner()` skips the `& `), and the input may carry a BOM or mangled
+  non-ASCII text: the hook reads stdin lossily and strips a BOM.
 
 ## Usage sources
 

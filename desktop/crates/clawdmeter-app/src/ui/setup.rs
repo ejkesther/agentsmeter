@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use clawdmeter_core::events::Agent;
 use clawdmeter_core::{usage, Paths, Settings};
 use gpui::{div, prelude::*, px, Context, Entity, EventEmitter, SharedString, Window};
 
@@ -310,11 +311,16 @@ impl SetupView {
     }
 
     fn hooks(&self, t: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let (installed, total, codex) = {
+        let (installed, total, codex, cursor) = {
             let s = self.settings.read(cx);
-            (s.installed_hooks(), s.hook_accounts(), s.lists_codex())
+            (s.installed_hooks(), s.hook_accounts(), s.lists(Agent::Codex), s.lists(Agent::Cursor))
         };
-        let title = if codex { "Add Claude Code and Codex hooks" } else { "Add Claude Code hooks" };
+        let title = match (codex, cursor) {
+            (false, false) => "Add Claude Code hooks",
+            (true, false) => "Add Claude Code and Codex hooks",
+            (false, true) => "Add Claude Code and Cursor hooks",
+            (true, true) => "Add Claude Code, Codex and Cursor hooks",
+        };
         let mut d = div().flex().flex_col().gap(px(16.)).pt(px(12.)).child(Self::title(title)).child(
             div().flex().justify_center().child(div().max_w(px(520.)).text_center().child(para(
                 t,

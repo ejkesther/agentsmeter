@@ -1,8 +1,8 @@
-//! The fast clock: Claude Code (and Codex) hook events.
+//! The fast clock: Claude Code (and Codex, Cursor) hook events.
 //!
 //! The hook (event mode) appends `<unix_ts> <HookEventName> <session_id>` to
-//! `<state>/events.log` and exits; Codex's hooks write the event name as
-//! `codex:<HookEventName>`. [`EventTail`] follows that file; the
+//! `<state>/events.log` and exits; Codex's and Cursor's hooks write the event
+//! name as `codex:<name>` / `cursor:<name>`. [`EventTail`] follows that file; the
 //! [`Activity`] tracker turns the lines into the payload's `a`, `e`/`es` and
 //! `n` fields and tells the poll scheduler what the user is doing.
 
@@ -40,6 +40,19 @@ impl HookKind {
             other => HookKind::Other(other.to_owned()),
         }
     }
+
+    /// Parse one agent's event name: Cursor's are camelCase
+    /// (`beforeSubmitPrompt`, `postToolUse`, `stop`, `preToolUse`).
+    pub fn parse_for(agent: Agent, s: &str) -> Self {
+        match (agent, s) {
+            (Agent::Cursor, "beforeSubmitPrompt") => HookKind::UserPromptSubmit,
+            (Agent::Cursor, "postToolUse") => HookKind::PostToolUse,
+            (Agent::Cursor, "stop") => HookKind::Stop,
+            (Agent::Cursor, "preToolUse") => HookKind::PreToolUse,
+            (Agent::Cursor, other) => HookKind::Other(other.to_owned()),
+            (_, other) => HookKind::parse(other),
+        }
+    }
     /// The event means the session talked to the API (or is about to): a
     /// prompt, a tool call, the end of a turn. That starts a 5-hour window
     /// when none is running.
@@ -57,6 +70,9 @@ pub enum Agent {
     /// OpenAI Codex: event names prefixed `codex:`. Its events move Clawd
     /// but never Claude's usage polling.
     Codex,
+    /// Cursor's agent: its own camelCase names, prefixed `cursor:`. Like
+    /// Codex's, its events move Clawd only.
+    Cursor,
 }
 
 impl Agent {
@@ -65,6 +81,25 @@ impl Agent {
         match self {
             Agent::Claude => "",
             Agent::Codex => "codex:",
+            Agent::Cursor => "cursor:",
+        }
+    }
+
+    /// The `--agent` word: `claude` (the default), `codex`, `cursor`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Codex => "codex",
+            Agent::Cursor => "cursor",
+        }
+    }
+
+    /// Its name for people.
+    pub fn name(self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex",
+            Agent::Cursor => "Cursor",
         }
     }
 }
@@ -92,9 +127,10 @@ fn token(s: &str) -> Option<(&str, &str)> {
     (end > 0).then(|| (&s[..end], &s[end..]))
 }
 
-/// Parse `<unix_ts> [codex:]<HookEventName> [<session_id> [<config dir>]]`;
-/// the config dir is the rest of the line (it may hold spaces). Fractional
-/// timestamps are accepted (truncated). Returns `None` for anything else.
+/// Parse `<unix_ts> [codex:|cursor:]<HookEventName> [<session_id> [<config
+/// dir>]]`; the config dir is the rest of the line (it may hold spaces).
+/// Fractional timestamps are accepted (truncated). Returns `None` for
+/// anything else.
 pub fn parse_line(line: &str) -> Option<HookEvent> {
     let (ts_raw, rest) = token(line)?;
     let ts = match ts_raw.split_once('.') {
@@ -103,11 +139,11 @@ pub fn parse_line(line: &str) -> Option<HookEvent> {
         None => ts_raw.parse().ok()?,
     };
     let (kind, rest) = token(rest)?;
-    let (agent, kind) = match kind.strip_prefix(Agent::Codex.prefix()) {
-        Some(k) => (Agent::Codex, k),
-        None => (Agent::Claude, kind),
-    };
-    let kind = HookKind::parse(kind);
+    let (agent, kind) = [Agent::Codex, Agent::Cursor]
+        .into_iter()
+        .find_map(|a| kind.strip_prefix(a.prefix()).map(|k| (a, k)))
+        .unwrap_or((Agent::Claude, kind));
+    let kind = HookKind::parse_for(agent, kind);
     let (session, rest) = token(rest).unwrap_or(("", ""));
     // The hook writes "-" when a payload has no session id.
     let session = if session == "-" { "" } else { session }.to_owned();
@@ -474,6 +510,18 @@ mod tests {
         assert_eq!(parse_line("1760000000 Stop abc").unwrap().agent, Agent::Claude);
         let e = parse_line("1760000000 codex:PermissionRequest t-1").unwrap();
         assert_eq!(e.kind, HookKind::Other("PermissionRequest".into()));
+        // Cursor's camelCase names.
+        for (name, kind) in [
+            ("beforeSubmitPrompt", HookKind::UserPromptSubmit),
+            ("postToolUse", HookKind::PostToolUse),
+            ("stop", HookKind::Stop),
+            ("afterFileEdit", HookKind::Other("afterFileEdit".into())),
+        ] {
+            let e = parse_line(&format!("1760000000 cursor:{name} conv-1")).unwrap();
+            assert_eq!((e.agent, e.kind, e.session.as_str()), (Agent::Cursor, kind, "conv-1"));
+        }
+        // Claude's names stay Claude's: no camelCase mapping without the prefix.
+        assert_eq!(parse_line("1760000000 stop x").unwrap().kind, HookKind::Other("stop".into()));
     }
 
     #[test]

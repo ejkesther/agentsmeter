@@ -1,7 +1,7 @@
-//! Claude Code and Codex hooks: `clawdmeter hook <alert|clear|event> [event]
-//! [--agent codex]` (the hook itself, see [`run`]) and the installer that
-//! wires it into each account's `settings.json` and Codex's `hooks.json`
-//! ([`install`]).
+//! Claude Code, Codex and Cursor hooks: `clawdmeter hook <alert|clear|event>
+//! [event] [--agent codex|cursor]` (the hook itself, see [`run`]) and the
+//! installer that wires it into each account's `settings.json` and Codex's
+//! and Cursor's `hooks.json` ([`install`]).
 //!
 //! The hook writes the files the daemon follows, under the state dir
 //! (`~/.config/clawdmeter`, `%LOCALAPPDATA%\Clawdmeter` on Windows):
@@ -12,15 +12,18 @@
 //! * `clear` touches `clear-<session id>`;
 //! * `event` appends `<unix_ts> <hook_event_name> <session_id>` to
 //!   `events.log`, rolling it to `events.log.1` past 256 KB. With
-//!   `--agent codex` the name reads `codex:<hook_event_name>`.
+//!   `--agent codex` / `--agent cursor` the name reads
+//!   `codex:<hook_event_name>` / `cursor:<hook_event_name>`.
 //!
 //! `alert event` / `clear event` do both from one read of stdin. Only the
 //! event name and session id are recorded, never the prompt or the tool call.
 //! Codex sends Claude Code's input fields (`hook_event_name`, `session_id`,
-//! `transcript_path`), so one hook serves both.
-//! Hook stdout can reach the model, so the hook prints nothing and always
-//! exits 0. The file formats match the legacy `attention-hook.sh` byte for
-//! byte apart from the alert's `k`, which older readers ignore.
+//! `transcript_path`), so one hook serves both; Cursor names the session
+//! `conversation_id`, and its Windows wrapper may prepend a BOM.
+//! Hook stdout can reach the model, so the hook prints nothing (for Cursor,
+//! only the empty answer it reads, [`cursor_reply`]) and always exits 0. The
+//! file formats match the legacy `attention-hook.sh` byte for byte apart
+//! from the alert's `k`, which older readers ignore.
 
 pub mod install;
 
@@ -44,7 +47,7 @@ pub struct Mode {
     pub action: Action,
     /// The second argument was `event`: also log the event.
     pub log_too: bool,
-    /// `--agent codex` anywhere after them: Codex runs this hook.
+    /// `--agent codex|cursor` anywhere after them: that agent runs this hook.
     pub agent: Agent,
 }
 
@@ -70,8 +73,9 @@ impl Mode {
             Some("event") => Action::Event,
             _ => Action::None,
         };
-        let agent = match args.iter().position(|a| a == "--agent").and_then(|i| args.get(i + 1)) {
-            Some(a) if a == "codex" => Agent::Codex,
+        let agent = match args.iter().position(|a| a == "--agent").and_then(|i| args.get(i + 1)).map(String::as_str) {
+            Some("codex") => Agent::Codex,
+            Some("cursor") => Agent::Cursor,
             _ => Agent::Claude,
         };
         Mode { action, log_too: args.get(1).map(String::as_str) == Some("event"), agent }
@@ -85,7 +89,7 @@ pub fn run(mode: Mode, input: &str, state_dir: &Path, now_unix: u64) {
         return;
     }
     // Invalid JSON: the script's jq calls all fail, so nothing is written.
-    let Ok(v) = serde_json::from_str::<Value>(input) else { return };
+    let Ok(v) = serde_json::from_str::<Value>(without_bom(input)) else { return };
     if mode.log_too {
         let _ = log_event(&v, mode.agent, state_dir, now_unix);
     }
@@ -95,6 +99,23 @@ pub fn run(mode: Mode, input: &str, state_dir: &Path, now_unix: u64) {
         Action::Event => log_event(&v, mode.agent, state_dir, now_unix),
         Action::None => Ok(()),
     };
+}
+
+/// The input without a leading UTF-8 BOM, which Cursor's PowerShell wrapper
+/// on Windows (and PowerShell pipes generally) can add.
+fn without_bom(input: &str) -> &str {
+    input.strip_prefix('\u{feff}').unwrap_or(input)
+}
+
+/// What Cursor reads back from the hook (stdout, exit 0): nothing to change,
+/// so the prompt goes on (`beforeSubmitPrompt` takes `continue`) and a Stop
+/// asks for no follow-up.
+pub fn cursor_reply(input: &str) -> &'static str {
+    let v: Value = serde_json::from_str(without_bom(input)).unwrap_or(Value::Null);
+    match v.get("hook_event_name").and_then(Value::as_str) {
+        Some("beforeSubmitPrompt") => "{\"continue\":true}",
+        _ => "{}",
+    }
 }
 
 /// jq's `//`: the value unless it is missing, null or false.
@@ -128,11 +149,13 @@ fn as_jq_object(v: &Value) -> Option<std::borrow::Cow<'_, Map<String, Value>>> {
 /// Claude Code the config dir (account) holding `projects/`
 /// (`<config dir>/projects/<project>/<session>.jsonl`), for Codex its home
 /// holding `sessions/` (`<home>/sessions/<yyyy>/<mm>/<dd>/rollout-….jsonl`).
+/// Cursor's has none: nothing reads its usage.
 pub fn account_of(v: &Value, agent: Agent) -> Option<String> {
     let path = Path::new(v.get("transcript_path")?.as_str()?);
     let marker = match agent {
         Agent::Claude => "projects",
         Agent::Codex => "sessions",
+        Agent::Cursor => return None,
     };
     let dir = path.ancestors().find(|a| a.file_name().is_some_and(|n| n == marker))?.parent()?;
     let s = dir.to_str()?;
@@ -140,14 +163,17 @@ pub fn account_of(v: &Value, agent: Agent) -> Option<String> {
 }
 
 /// `<ts> <event> <session> [<config dir>]`: event and session reduced to
-/// `[A-Za-z0-9_.-]` (the event then prefixed `codex:` for Codex), the config
-/// dir ([`account_of`]) as the rest of the line when the input has a
-/// transcript path.
+/// `[A-Za-z0-9_.-]` (the event then prefixed `codex:` / `cursor:`), the
+/// config dir ([`account_of`]) as the rest of the line when the input has a
+/// transcript path. The session is `session_id`, else Cursor's
+/// `conversation_id`.
 pub fn event_line(v: &Value, agent: Agent, now_unix: u64) -> Option<String> {
     // `.hook_event_name` on a non-object is a jq error: no line.
     let obj = as_jq_object(v)?;
     let name = present(obj.get("hook_event_name")).map_or_else(|| "unknown".to_owned(), jq_tostring);
-    let sid = present(obj.get("session_id")).map_or_else(|| "-".to_owned(), jq_tostring);
+    let sid = present(obj.get("session_id"))
+        .or_else(|| present(obj.get("conversation_id")))
+        .map_or_else(|| "-".to_owned(), jq_tostring);
     let (name, sid) = (format!("{}{}", agent.prefix(), sanitize(&name)), sanitize(&sid));
     Some(match account_of(v, agent) {
         Some(acct) => format!("{now_unix} {name} {} {acct}\n", if sid.is_empty() { "-" } else { &sid }),
@@ -244,17 +270,24 @@ fn touch_clear(v: &Value, dir: &Path) -> io::Result<()> {
 pub fn main(args: &[String]) -> i32 {
     use std::io::{IsTerminal as _, Read as _};
     let mode = Mode::parse(args);
-    let mut input = String::new();
+    let mut raw = Vec::new();
     // Read stdin even for a no-op mode, so Claude Code never sees a broken
     // pipe; but never wait on a terminal (someone trying it by hand).
     let stdin = io::stdin();
     if !stdin.is_terminal() {
-        let _ = stdin.lock().read_to_string(&mut input);
+        let _ = stdin.lock().read_to_end(&mut raw);
     }
+    // Lossy: a wrapper that mangles non-ASCII text (Cursor's PowerShell) must
+    // not cost the event name and session id.
+    let input = String::from_utf8_lossy(&raw);
     if mode.action != Action::None || mode.log_too {
         let state = clawdmeter_core::Paths::for_user().state_dir;
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         run(mode, &input, &state, now);
+    }
+    if mode.agent == Agent::Cursor {
+        let mut out = io::stdout();
+        let _ = out.write_all(cursor_reply(&input).as_bytes()).and_then(|()| out.flush());
     }
     0
 }
@@ -296,7 +329,8 @@ mod tests {
             Mode { action: Action::Event, log_too: false, agent: Agent::Codex }
         );
         assert_eq!(Mode::parse(&args("event --agent")).agent, Agent::Claude);
-        assert_eq!(Mode::parse(&args("event --agent cursor")).agent, Agent::Claude);
+        assert_eq!(Mode::parse(&args("event --agent cursor")).agent, Agent::Cursor);
+        assert_eq!(Mode::parse(&args("event --agent windsurf")).agent, Agent::Claude);
     }
 
     #[test]
@@ -340,6 +374,16 @@ mod tests {
             "7 codex:Stop x\n"
         );
         assert_eq!(account_of(&json!({"transcript_path": "/h/.claude/projects/p/x.jsonl"}), Agent::Codex), None);
+        // Cursor: its conversation is the session; no account.
+        let v = json!({"hook_event_name": "beforeSubmitPrompt", "conversation_id": "c0ffee-1", "generation_id": "g1",
+            "prompt": "secret", "transcript_path": "/home/me/.cursor/projects/x/agent-transcripts/c0ffee-1.txt"});
+        let line = event_line(&v, Agent::Cursor, 7).unwrap();
+        assert_eq!(line, "7 cursor:beforeSubmitPrompt c0ffee-1\n");
+        let parsed = clawdmeter_core::events::parse_line(line.trim_end()).unwrap();
+        assert_eq!((parsed.agent, parsed.kind), (Agent::Cursor, clawdmeter_core::events::HookKind::UserPromptSubmit));
+        // `session_id` (Cursor's sessionStart has both) wins.
+        let v = json!({"hook_event_name": "stop", "session_id": "s", "conversation_id": "c"});
+        assert_eq!(event_line(&v, Agent::Cursor, 7).unwrap(), "7 cursor:stop s\n");
     }
 
     #[test]
@@ -413,6 +457,28 @@ mod tests {
             .unwrap()
             .flatten()
             .all(|e| !e.file_name().to_string_lossy().starts_with("attention.")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cursor_replies_and_bom() {
+        // Cursor reads a JSON answer: the prompt goes on, nothing else changes.
+        assert_eq!(
+            cursor_reply(r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c"}"#),
+            "{\"continue\":true}"
+        );
+        assert_eq!(cursor_reply(r#"{"hook_event_name":"stop","status":"completed"}"#), "{}");
+        assert_eq!(cursor_reply("not json"), "{}");
+        assert_eq!(cursor_reply("\u{feff}{\"hook_event_name\":\"beforeSubmitPrompt\"}"), "{\"continue\":true}");
+        // A BOM in front (Cursor's PowerShell wrapper) still logs the event.
+        let d = dir("bom");
+        run(
+            Mode::parse(&args("event --agent cursor")),
+            "\u{feff}{\"hook_event_name\":\"stop\",\"conversation_id\":\"c1\"}",
+            &d,
+            5,
+        );
+        assert_eq!(fs::read_to_string(d.join("events.log")).unwrap(), "5 cursor:stop c1\n");
         let _ = fs::remove_dir_all(&d);
     }
 

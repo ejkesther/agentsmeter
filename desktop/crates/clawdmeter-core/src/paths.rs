@@ -22,6 +22,9 @@ pub struct Paths {
     /// Codex's home (`$CODEX_HOME`, else `~/.codex`): its `hooks.json`
     /// takes the Codex hooks.
     pub codex_home: PathBuf,
+    /// Cursor's user folder (`~/.cursor`): its `hooks.json` takes the
+    /// Cursor hooks.
+    pub cursor_home: PathBuf,
 }
 
 impl Paths {
@@ -42,7 +45,8 @@ impl Paths {
             .filter(|h| !h.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".codex"));
-        Paths { home, state_dir, config_file, cache_dir, codex_home }
+        let cursor_home = home.join(".cursor");
+        Paths { home, state_dir, config_file, cache_dir, codex_home, cursor_home }
     }
 
     /// Everything under one root (tests, portable installs).
@@ -54,6 +58,7 @@ impl Paths {
             state_dir,
             cache_dir: root.join("cache"),
             codex_home: root.join(".codex"),
+            cursor_home: root.join(".cursor"),
         }
     }
 

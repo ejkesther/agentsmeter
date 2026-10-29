@@ -251,7 +251,7 @@ impl Engine {
         }
         if claude {
             self.claude_activity.ingest(ev);
-        } else if ev.kind == HookKind::Stop {
+        } else if ev.agent == Agent::Codex && ev.kind == HookKind::Stop {
             self.codex_stop_at = Some(now);
         }
         match self.activity.ingest(ev) {
