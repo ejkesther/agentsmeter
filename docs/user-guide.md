@@ -92,6 +92,19 @@ is saved as `settings.json.bak`; later changes keep that backup. Other hooks
 remain in place. On macOS, move Clawdmeter to Applications before setting up
 hooks or Start at login; on Windows, extract it from the zip first.
 
+If Codex is installed (`~/.codex`, or `$CODEX_HOME`), the page also lists
+its `hooks.json`. Codex's hooks make Clawd react to Codex sessions too, and
+a Codex permission prompt alerts like Claude Code's. They don't change how
+often Claude usage is polled. Codex runs new or changed hooks only after you
+trust them: type `/hooks` in Codex once after installing or updating them.
+
+Codex's usage needs no hooks: Clawdmeter reads the 5-hour and weekly limits
+Codex saves in its session logs, about once a minute and right after a Codex
+turn ends. That sends nothing over the network. The **Accounts** page lists
+Codex, and the device shows whichever of Claude and Codex moved last; with
+the clock off, its title reads **Codex** or **Claude** to say which. Codex
+saves limits only when it signs in with ChatGPT, not with an API key.
+
 Hooks let Clawd react to activity and show alerts. The local event log
 contains timestamps, event types, and session IDs. Alerts also store the
 notification message or the first question from `AskUserQuestion`, which
@@ -194,6 +207,7 @@ seconds and preserves comments and unknown keys when saving.
 | `heartbeat_interval` | `60` | Resend cached readings between usage checks. This does not fetch usage. Keep the default unless diagnosing the connection. |
 | `claude_path` | found on `PATH` | Full path to the Claude Code executable, if detection fails. |
 | `update_check` | `on` | Check for firmware releases daily. |
+| `codex_usage` | `on` | While Codex is installed (`~/.codex` or `$CODEX_HOME`), read its 5-hour and weekly usage from its session logs and show it as one more account. `off` stops reading it. |
 | `alert_on` | `permission, question, elicitation` | Which waits alert on the device and tray: `permission`, `question`, `idle`, `elicitation` (MCP input), or `none`. Set on the Hooks page. Other notification types follow `permission`. |
 | `release_repo` | `HermannBjorgvin/Clawdmeter` | GitHub repository used for firmware releases. |
 | `onboarding_done` | unset | `true` after setup is finished or skipped. |

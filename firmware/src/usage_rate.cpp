@@ -28,10 +28,14 @@ static inline const Sample& at_age(uint8_t i) {   // 0 = newest
 }
 
 void usage_rate_clear(void) {
-    count = 0;
-    head  = 0;
+    usage_rate_rebase();
     act_level = -1;
     act_ms = 0;
+}
+
+void usage_rate_rebase(void) {
+    count = 0;
+    head  = 0;
 }
 
 bool usage_rate_sample_at(uint32_t now_ms, float session_pct, bool replay) {

@@ -61,6 +61,7 @@ tap round 233 300 hold_ms=5000   # one board, in its panel's pixels
 press lcd4 boot hold_ms=150      # one board's button: boot, secondary, pwr
 link false                 # BLE down on every board (the pairing hint)
 liveliness 5
+clock off                  # no `t`, the app's default: the title names the agent (`pv`) or reads Usage
 shot /path/grid.png scale=0.5    # board=<id> for one panel
 record /path/clip.gif fps=15 scale=0.4
 step 8000

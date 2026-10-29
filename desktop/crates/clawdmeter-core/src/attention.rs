@@ -41,7 +41,8 @@ pub const MESSAGE_LIMIT: usize = 120;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlertKind {
     /// A tool needs permission (`Notification`, `permission_prompt`). Also
-    /// a `Notification` with no type, as older Claude Code sends.
+    /// a `Notification` with no type, as older Claude Code sends, and Codex's
+    /// `PermissionRequest`.
     Permission,
     /// Claude asks a question (`PreToolUse` on `AskUserQuestion`).
     Question,
@@ -78,10 +79,12 @@ impl AlertKind {
     }
 
     /// The kind for one hook input: `PreToolUse` is the question tool,
-    /// `Notification` is told apart by its `notification_type`.
+    /// `PermissionRequest` (Codex) a permission prompt, `Notification` is
+    /// told apart by its `notification_type`.
     pub fn from_hook(event: Option<&str>, notification_type: Option<&str>) -> Self {
         match (event, notification_type) {
             (Some("PreToolUse"), _) => AlertKind::Question,
+            (Some("PermissionRequest"), _) => AlertKind::Permission,
             (_, None | Some("permission_prompt")) => AlertKind::Permission,
             (_, Some("idle_prompt")) => AlertKind::Idle,
             (_, Some("elicitation_dialog")) => AlertKind::Elicitation,
@@ -516,6 +519,7 @@ mod tests {
         assert_eq!(k(Some("Notification"), Some("idle_prompt")), AlertKind::Idle);
         assert_eq!(k(Some("Notification"), Some("elicitation_dialog")), AlertKind::Elicitation);
         assert_eq!(k(Some("Notification"), Some("auth_success")), AlertKind::Other);
+        assert_eq!(k(Some("PermissionRequest"), None), AlertKind::Permission);
         for kind in [AlertKind::Permission, AlertKind::Question, AlertKind::Idle, AlertKind::Elicitation] {
             assert_eq!(AlertKind::parse(Some(kind.as_str())), kind);
         }

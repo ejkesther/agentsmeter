@@ -6,6 +6,7 @@
 //! * [`usage`]: run and parse `claude --output-format json -p /usage`.
 //! * [`oauth`]: usage from Claude's usage endpoint with Claude Code's stored sign-in.
 //! * [`probe`]: usage from one message's rate-limit headers, and when that is allowed.
+//! * [`codex`]: Codex's usage from the rate limits in its own session logs.
 //! * [`events`]: the hook events log (fast clock) and the activity tracker.
 //! * [`attention`]: the attention hook's alert / clear files (written by
 //!   `clawdmeter hook`; the installer lives in the app crate).
@@ -24,6 +25,7 @@ pub mod attention;
 pub mod autostart;
 pub mod backoff;
 pub mod cadence;
+pub mod codex;
 pub mod config;
 pub mod engine;
 pub mod events;

@@ -310,11 +310,12 @@ impl SetupView {
     }
 
     fn hooks(&self, t: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let (installed, total) = {
+        let (installed, total, codex) = {
             let s = self.settings.read(cx);
-            (s.installed_hooks(), s.hook_accounts())
+            (s.installed_hooks(), s.hook_accounts(), s.lists_codex())
         };
-        let mut d = div().flex().flex_col().gap(px(16.)).pt(px(12.)).child(Self::title("Add Claude Code hooks")).child(
+        let title = if codex { "Add Claude Code and Codex hooks" } else { "Add Claude Code hooks" };
+        let mut d = div().flex().flex_col().gap(px(16.)).pt(px(12.)).child(Self::title(title)).child(
             div().flex().justify_center().child(div().max_w(px(520.)).text_center().child(para(
                 t,
                 "Hooks let Clawd react to activity and show alerts. They store event metadata locally, plus \

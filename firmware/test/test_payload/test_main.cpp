@@ -121,6 +121,26 @@ static void test_pace_marker(void) {
     TEST_ASSERT_EQUAL_INT(1, d.pace_marker);
 }
 
+static void test_provider(void) {
+    UsageData d;
+    TEST_ASSERT_TRUE(payload_parse("{\"ok\":true}", &d, nullptr));
+    TEST_ASSERT_EQUAL_STRING("", d.provider);
+    TEST_ASSERT_EQUAL_STRING("Usage", payload_provider_title(d.provider));
+    TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"cx\"}", &d, nullptr));
+    TEST_ASSERT_EQUAL_STRING("Codex", payload_provider_title(d.provider));
+    TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"cl\"}", &d, nullptr));
+    TEST_ASSERT_EQUAL_STRING("Claude", payload_provider_title(d.provider));
+    // An agent this firmware doesn't know: the plain title, kept to 3 chars.
+    TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"cursor\"}", &d, nullptr));
+    TEST_ASSERT_EQUAL_STRING("cur", d.provider);
+    TEST_ASSERT_EQUAL_STRING("Usage", payload_provider_title(d.provider));
+    // Absent is Claude: an app without Codex set up sends no `pv`.
+    TEST_ASSERT_TRUE(payload_same_provider("", "cl"));
+    TEST_ASSERT_TRUE(payload_same_provider("cx", "cx"));
+    TEST_ASSERT_FALSE(payload_same_provider("", "cx"));
+    TEST_ASSERT_FALSE(payload_same_provider("cl", "cx"));
+}
+
 static void test_long_strings_truncate(void) {
     UsageData d;
     TEST_ASSERT_TRUE(payload_parse("{\"st\":\"abcdefghijklmnopqrstuvwxyz\"}", &d, nullptr));
@@ -137,6 +157,7 @@ int main(void) {
     RUN_TEST(test_liveliness);
     RUN_TEST(test_attention_animation);
     RUN_TEST(test_pace_marker);
+    RUN_TEST(test_provider);
     RUN_TEST(test_long_strings_truncate);
     return UNITY_END();
 }

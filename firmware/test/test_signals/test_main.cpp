@@ -112,6 +112,26 @@ static void test_no_data_beat_is_not_a_sample(void) {
     TEST_ASSERT_EQUAL_INT(RATE_IDLE, usage_rate_base_group_at(3000 + 15 * MIN));
 }
 
+// The device switching agents (Codex at 40 %, then Claude at 15 %) is a new
+// series, not a reset; a drop within one agent still is.
+static void test_provider_switch_is_not_a_reset(void) {
+    UsageData d = parse("{\"s\":40,\"pv\":\"cx\",\"ok\":true}");
+    signals_ingest_at(&d, 1000);
+    d = parse("{\"s\":15,\"pv\":\"cl\",\"ok\":true}");
+    TEST_ASSERT_FALSE(signals_ingest_at(&d, 2000).session_reset);
+    // A replay from the other agent changes nothing: only real samples count.
+    d = parse("{\"s\":40,\"pv\":\"cx\",\"rp\":1,\"ok\":true}");
+    TEST_ASSERT_FALSE(signals_ingest_at(&d, 3000).session_reset);
+    d = parse("{\"s\":2,\"pv\":\"cl\",\"ok\":true}");
+    TEST_ASSERT_TRUE(signals_ingest_at(&d, 4000).session_reset);
+    // Codex set up later: "cl" after no `pv` is the same agent.
+    signals_clear();
+    d = parse("{\"s\":50,\"ok\":true}");
+    signals_ingest_at(&d, 1000);
+    d = parse("{\"s\":1,\"pv\":\"cl\",\"ok\":true}");
+    TEST_ASSERT_TRUE(signals_ingest_at(&d, 2000).session_reset);
+}
+
 static void test_sessions_change(void) {
     UsageData d = parse("{\"n\":2}");
     TEST_ASSERT_TRUE(signals_ingest_at(&d, 1000).sessions_changed);
@@ -132,6 +152,7 @@ int main(void) {
     RUN_TEST(test_replay_skips_rate_but_keeps_activity);
     RUN_TEST(test_session_reset_through_signals);
     RUN_TEST(test_no_data_beat_is_not_a_sample);
+    RUN_TEST(test_provider_switch_is_not_a_reset);
     RUN_TEST(test_sessions_change);
     return UNITY_END();
 }

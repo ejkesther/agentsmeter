@@ -11,6 +11,12 @@ static const char* const PAIR_TEXT_TOUCH[3]   = { "To pair", "touch and hold her
 static const char* const PAIR_TEXT_CLEARED[3] = { "Ready to pair", "choose Clawdmeter", "on your computer" };
 static const char* const PAIR_TEXT_HOLDING    = "keep holding...";
 
+// The title when there's no clock: whose usage the meters show (`pv`), or
+// "Usage" when the app doesn't say (payload_provider_title). Sized like the
+// 24-hour clock.
+#define TITLE_TEXT_COUNT 3
+static const char* const TITLE_TEXT[TITLE_TEXT_COUNT] = { "Usage", "Claude", "Codex" };
+
 // Card pills: session, weekly, then the spend-capped account's spending and
 // period. The short set is for panels too narrow for the long one.
 static const char* const PILL_TEXT[4]       = { "Session", "Weekly", "Spending", "Period" };

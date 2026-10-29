@@ -84,8 +84,8 @@ static Box status_box(const char* text) {
     return { (P->w - w) / 2, P->h + L.status_y - lh, w, lh };
 }
 
-// Clock strings for one format: every time of day, and "Usage" with the
-// 24-hour clock.
+// Clock strings for one format: every time of day, and the no-clock titles
+// ("Usage", "Claude", "Codex") with the 24-hour clock.
 static void each_title(bool h12, void (*fn)(const char*)) {
     char buf[12];
     for (int h = 0; h < 24; h++)
@@ -94,7 +94,8 @@ static void each_title(bool h12, void (*fn)(const char*)) {
             else     snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
             fn(buf);
         }
-    if (!h12) fn("Usage");
+    if (!h12)
+        for (const char* t : TITLE_TEXT) fn(t);
 }
 
 static int title_fmt;

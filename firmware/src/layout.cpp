@@ -76,8 +76,9 @@ static int16_t widest_clock(const lv_font_t* f, bool h12) {
         const int32_t am = layout_text_width(f, " AM"), pm = layout_text_width(f, " PM");
         w += am > pm ? am : pm;
     } else {
-        const int32_t usage = layout_text_width(f, "Usage");
-        if (usage > w) w = usage;
+        // The same font titles the meters when there's no clock.
+        const int32_t words = widest(f, TITLE_TEXT, TITLE_TEXT_COUNT);
+        if (words > w) w = words;
     }
     return (int16_t)w;
 }

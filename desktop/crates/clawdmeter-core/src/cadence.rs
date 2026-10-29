@@ -143,6 +143,11 @@ impl Scheduler {
         self.requested_at = Some(now);
     }
 
+    /// When fresh numbers were last asked for.
+    pub fn requested_at(&self) -> Option<i64> {
+        self.requested_at
+    }
+
     /// A prompt was sent.
     pub fn on_prompt(&mut self, now: i64) {
         self.prompt_at = Some(now);
@@ -230,7 +235,7 @@ mod tests {
     use crate::events::{HookEvent, HookKind};
 
     fn ev(ts: i64, kind: &str) -> HookEvent {
-        HookEvent { ts, kind: HookKind::parse(kind), session: "s".into(), account: None }
+        HookEvent { ts, kind: HookKind::parse(kind), session: "s".into(), account: None, agent: Default::default() }
     }
 
     fn shown(last: i64) -> AccountClock {

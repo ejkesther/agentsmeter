@@ -1,7 +1,8 @@
-//! The fast clock: Claude Code hook events.
+//! The fast clock: Claude Code (and Codex) hook events.
 //!
 //! The hook (event mode) appends `<unix_ts> <HookEventName> <session_id>` to
-//! `<state>/events.log` and exits. [`EventTail`] follows that file; the
+//! `<state>/events.log` and exits; Codex's hooks write the event name as
+//! `codex:<HookEventName>`. [`EventTail`] follows that file; the
 //! [`Activity`] tracker turns the lines into the payload's `a`, `e`/`es` and
 //! `n` fields and tells the poll scheduler what the user is doing.
 
@@ -47,6 +48,27 @@ impl HookKind {
     }
 }
 
+/// The coding agent a hook event came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Agent {
+    /// Claude Code: event names as they are.
+    #[default]
+    Claude,
+    /// OpenAI Codex: event names prefixed `codex:`. Its events move Clawd
+    /// but never Claude's usage polling.
+    Codex,
+}
+
+impl Agent {
+    /// The prefix its events.log event names carry.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Agent::Claude => "",
+            Agent::Codex => "codex:",
+        }
+    }
+}
+
 /// One events.log line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookEvent {
@@ -56,9 +78,11 @@ pub struct HookEvent {
     pub kind: HookKind,
     /// Session id (may be empty).
     pub session: String,
-    /// The Claude Code config dir (account) the session runs under, when the
-    /// hook could tell.
+    /// Where the session's files live, when the hook could tell: the Claude
+    /// Code config dir (account), or for Codex its home.
     pub account: Option<PathBuf>,
+    /// The agent that ran the hook.
+    pub agent: Agent,
 }
 
 /// One whitespace-separated token and what follows it.
@@ -68,8 +92,8 @@ fn token(s: &str) -> Option<(&str, &str)> {
     (end > 0).then(|| (&s[..end], &s[end..]))
 }
 
-/// Parse `<unix_ts> <HookEventName> [<session_id> [<config dir>]]`; the
-/// config dir is the rest of the line (it may hold spaces). Fractional
+/// Parse `<unix_ts> [codex:]<HookEventName> [<session_id> [<config dir>]]`;
+/// the config dir is the rest of the line (it may hold spaces). Fractional
 /// timestamps are accepted (truncated). Returns `None` for anything else.
 pub fn parse_line(line: &str) -> Option<HookEvent> {
     let (ts_raw, rest) = token(line)?;
@@ -79,12 +103,16 @@ pub fn parse_line(line: &str) -> Option<HookEvent> {
         None => ts_raw.parse().ok()?,
     };
     let (kind, rest) = token(rest)?;
+    let (agent, kind) = match kind.strip_prefix(Agent::Codex.prefix()) {
+        Some(k) => (Agent::Codex, k),
+        None => (Agent::Claude, kind),
+    };
     let kind = HookKind::parse(kind);
     let (session, rest) = token(rest).unwrap_or(("", ""));
     // The hook writes "-" when a payload has no session id.
     let session = if session == "-" { "" } else { session }.to_owned();
     let account = Some(rest.trim()).filter(|a| !a.is_empty()).map(PathBuf::from);
-    Some(HookEvent { ts, kind, session, account })
+    Some(HookEvent { ts, kind, session, account, agent })
 }
 
 /// How much history to read at start-up for seeding the tracker.
@@ -420,7 +448,7 @@ mod tests {
     use std::io::Write;
 
     fn ev(ts: i64, kind: &str, sid: &str) -> HookEvent {
-        HookEvent { ts, kind: HookKind::parse(kind), session: sid.into(), account: None }
+        HookEvent { ts, kind: HookKind::parse(kind), session: sid.into(), account: None, agent: Agent::Claude }
     }
 
     #[test]
@@ -439,6 +467,13 @@ mod tests {
         assert_eq!(e.session, "abc");
         assert_eq!(parse_line("1760000000 Stop - /home/me/.claude").unwrap().session, "");
         assert_eq!(parse_line("1760000000 Stop abc  ").unwrap().account, None);
+        // Codex's hooks prefix the event name.
+        let e = parse_line("1760000000 codex:UserPromptSubmit t-1 C:\\Users\\me\\.codex").unwrap();
+        assert_eq!((e.agent, &e.kind, e.session.as_str()), (Agent::Codex, &HookKind::UserPromptSubmit, "t-1"));
+        assert_eq!(e.account.as_deref(), Some(std::path::Path::new("C:\\Users\\me\\.codex")));
+        assert_eq!(parse_line("1760000000 Stop abc").unwrap().agent, Agent::Claude);
+        let e = parse_line("1760000000 codex:PermissionRequest t-1").unwrap();
+        assert_eq!(e.kind, HookKind::Other("PermissionRequest".into()));
     }
 
     #[test]

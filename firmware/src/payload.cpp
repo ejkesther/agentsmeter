@@ -1,4 +1,5 @@
 #include "payload.h"
+#include "ui_text.h"
 #include <ArduinoJson.h>
 #include <string.h>
 
@@ -76,9 +77,21 @@ bool payload_parse(const char* json, UsageData* out, const char** err) {
 
     JsonVariant pm = doc["pm"];
     d.pace_marker = pm.isNull() ? -1 : (int8_t)((pm | 0) ? 1 : 0);
+    copy_str(d.provider, sizeof(d.provider), doc["pv"] | "");
 
     d.ok = doc["ok"] | false;
     d.valid = true;
     *out = d;
     return true;
+}
+
+const char* payload_provider_title(const char* pv) {
+    if (pv && strcmp(pv, "cl") == 0) return TITLE_TEXT[1];
+    if (pv && strcmp(pv, "cx") == 0) return TITLE_TEXT[2];
+    return TITLE_TEXT[0];
+}
+
+bool payload_same_provider(const char* a, const char* b) {
+    auto agent = [](const char* pv) { return pv && pv[0] ? pv : "cl"; };
+    return strcmp(agent(a), agent(b)) == 0;
 }

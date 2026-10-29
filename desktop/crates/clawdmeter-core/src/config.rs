@@ -266,6 +266,9 @@ pub struct Settings {
     pub attention_anim: AttentionAnim,
     /// Pace marker on the device's usage bars (`pm`, default off).
     pub pace_marker: bool,
+    /// Codex's home, read as one more account ([`crate::codex`]): set while
+    /// that folder exists, unless `codex_usage = off`. Derived, never written.
+    pub codex_home: Option<PathBuf>,
 }
 
 /// `alert_on`: the alert kinds that show, as a comma list of `permission`,
@@ -394,6 +397,7 @@ impl Settings {
             liveliness: cfg.get("liveliness").map(parse_liveliness).unwrap_or(DEFAULT_LIVELINESS),
             attention_anim: cfg.get("attention_anim").map(AttentionAnim::parse).unwrap_or_default(),
             pace_marker: on_off(cfg.get("pace_marker"), false),
+            codex_home: on_off(cfg.get("codex_usage"), true).then(|| paths.codex_home.clone()).filter(|h| h.is_dir()),
         }
     }
 
@@ -612,6 +616,19 @@ mod tests {
         assert_eq!(settings("").release_repo, DEFAULT_RELEASE_REPO);
         assert_eq!(settings("release_repo = me/fork").release_repo, "me/fork");
         assert_eq!(settings("release_repo = nonsense").release_repo, DEFAULT_RELEASE_REPO);
+    }
+
+    #[test]
+    fn codex_home_while_codex_is_there() {
+        let root = std::env::temp_dir().join(format!("cm-cfg-codex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::under(&root);
+        let codex = |text: &str| Settings::from_config(&ConfigFile::parse(text), &paths, None).codex_home;
+        assert_eq!(codex(""), None, "Codex isn't installed");
+        std::fs::create_dir_all(&paths.codex_home).unwrap();
+        assert_eq!(codex(""), Some(paths.codex_home.clone()));
+        assert_eq!(codex("codex_usage = off\n"), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
