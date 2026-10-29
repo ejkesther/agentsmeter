@@ -7,6 +7,7 @@
 #include <lvgl.h>
 #include <time.h>
 #include <stdio.h>
+#include <string.h>
 #include <Arduino.h>
 #include "logo.h"
 #include "clawd_still.h"
@@ -14,6 +15,7 @@
 #include "hal/board_caps.h"
 #include "layout.h"
 #include "ui_text.h"
+#include "payload.h"
 #include "pace.h"
 
 // Where everything goes, from the panel's shape (layout.h). Computed once in
@@ -586,11 +588,16 @@ void ui_update(const UsageData* data) {
         clock_base_ms = last_data_ms;
         clock_fmt = data->clock_fmt;
         apply_title_font();
-    } else if (clock_base_epoch != 0) {   // clock turned off daemon-side → revert title to "Usage"
-        clock_base_epoch = 0;
-        clock_last_min = -1;
-        lv_label_set_text(lbl_title, "Usage");
-        apply_title_font();
+    } else {
+        // No clock (or turned off daemon-side): the title says whose usage
+        // the meters show, "Usage" when the app doesn't say.
+        const char* title = payload_provider_title(data->provider);
+        if (clock_base_epoch != 0 || strcmp(lv_label_get_text(lbl_title), title) != 0) {
+            clock_base_epoch = 0;
+            clock_last_min = -1;
+            lv_label_set_text(lbl_title, title);
+            apply_title_font();
+        }
     }
 
     int s_pct = (int)(data->session_pct + 0.5f);

@@ -1,5 +1,7 @@
 #include "signals.h"
+#include "payload.h"
 #include "usage_rate.h"
+#include <string.h>
 
 // Pure: no Arduino. See signals.h.
 
@@ -8,6 +10,7 @@ static bool     have_seq   = false;
 static uint32_t last_seq   = 0;
 static char     last_event = '\0';
 static int      sessions   = -1;
+static char     sample_pv[sizeof(UsageData::provider)] = "";   // `pv` of the last real sample
 
 void signals_clear(void) {
     hooks_seen = false;
@@ -15,6 +18,7 @@ void signals_clear(void) {
     last_seq = 0;
     last_event = '\0';
     sessions = -1;
+    sample_pv[0] = '\0';
     usage_rate_clear();
 }
 
@@ -34,6 +38,10 @@ SignalsUpdate signals_ingest_at(const UsageData* d, uint32_t now_ms) {
     // session % (it parses as 0), so it must not reach the rate ring or the
     // reset detector (it would read as a fresh window and fire the chime).
     const bool real_sample = d->ok && !d->replay;
+    // The device switched agents (Claude ↔ Codex): their numbers are a new
+    // series, so a lower session % there is not a reset.
+    if (real_sample && !payload_same_provider(sample_pv, d->provider)) usage_rate_rebase();
+    if (real_sample) memcpy(sample_pv, d->provider, sizeof(sample_pv));
     u.session_reset = usage_rate_sample_at(now_ms, d->session_pct, !real_sample);
 
     if (d->has_event_seq) {

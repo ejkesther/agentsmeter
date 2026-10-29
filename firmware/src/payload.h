@@ -15,8 +15,17 @@
 //   rp  1 = usage numbers are a replay        lv  liveliness 1-5 (clamped), -1 absent
 //   aa  attention animation seconds 0-120 (clamped, 0 = off), -1 absent
 //   pm  pace marker on the usage bars, 1 on / 0 off, -1 absent
+//   pv  whose numbers: "cl" Claude, "cx" Codex (up to 3 chars kept), "" absent
 //
 // Returns false on malformed JSON; `*err` (if non-null) then points at a
 // static description. `out` is fully overwritten on success, untouched on
 // failure.
 bool payload_parse(const char* json, UsageData* out, const char** err);
+
+// The meters' title without a clock for `pv`: "Claude", "Codex", or "Usage"
+// when absent or unknown (TITLE_TEXT in ui_text.h).
+const char* payload_provider_title(const char* pv);
+
+// Two `pv` values name the same agent; absent counts as Claude, which is
+// what an app without Codex set up means.
+bool payload_same_provider(const char* a, const char* b);

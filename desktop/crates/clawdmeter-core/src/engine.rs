@@ -497,6 +497,12 @@ impl Engine {
                 log::info!("active plan: {}", a.display());
             }
         }
+        // Claude ↔ Codex on the device: another agent's numbers start a new
+        // series, as the firmware does on a `pv` change.
+        let codex = |a: &Option<PathBuf>| a.as_ref().is_some_and(|a| self.is_codex(a));
+        if prev_active.is_some() && codex(&prev_active) != codex(&self.active) {
+            self.rate = RateTracker::default();
+        }
         let claude: Vec<(PathBuf, u32)> =
             sessions.into_iter().filter(|(k, _)| self.settings.config_dirs.contains(k)).collect();
         self.claude_active = self.claude_selector.choose(&claude);
@@ -514,6 +520,13 @@ impl Engine {
         self.in_flight.clear();
         self.logged_out = all_auth;
         self.fresh_poll = active_fresh || (all_auth && polled);
+    }
+
+    /// `pv` for the shown account: "cx" for Codex, "cl" for Claude while
+    /// Codex is set up too; nothing without Codex (the device says "Usage").
+    fn provider(&self) -> Option<String> {
+        let home = self.settings.codex_home.as_ref()?;
+        Some(if self.active.as_ref() == Some(home) { "cx" } else { "cl" }.to_owned())
     }
 
     /// Codex's latest reading, when it has one.
@@ -589,6 +602,7 @@ impl Engine {
             p.lv = Some(self.settings.liveliness);
             p.aa = Some(aa);
             p.pm = Some(pm);
+            p.pv = self.provider();
             (p, kind)
         };
 
@@ -1051,7 +1065,8 @@ mod tests {
         assert_eq!(p.plans, vec![ProbePlan::Usage, ProbePlan::CodexLogs]);
         e.on_poll_results(T0, vec![(a.clone(), Ok(reading(15))), (codex.clone(), Ok(reading(40)))]);
         assert_eq!(e.status(T0).active_account, Some(codex.clone()), "the higher one at first");
-        assert_eq!(write(&mut e, T0).unwrap().payload.s, Some(40));
+        let w = write(&mut e, T0).unwrap();
+        assert_eq!((w.payload.s, w.payload.pv.as_deref()), (Some(40), Some("cx")));
 
         // Every minute, alone; the same numbers again aren't a poll write.
         assert!(e.begin_poll(T0 + 59).is_none());
@@ -1076,6 +1091,8 @@ mod tests {
         assert!(p.accounts.contains(&a), "{:?}", p.accounts);
         e.on_poll_results(T0 + 200, vec![(a.clone(), Ok(reading(16))), (codex.clone(), Ok(reading(42)))]);
         assert_eq!(e.status(T0 + 200).active_account, Some(a.clone()), "Claude moved last");
+        let w = write(&mut e, T0 + 200).unwrap();
+        assert_eq!((w.payload.s, w.payload.pv.as_deref()), (Some(16), Some("cl")), "named while Codex is set up");
 
         // Claude signed out, Codex still has numbers: not "no data".
         e.on_poll_results(T0 + 400, vec![(a.clone(), Err(UsageError::NotLoggedIn("x".into())))]);

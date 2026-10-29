@@ -101,7 +101,8 @@ trust them: type `/hooks` in Codex once after installing or updating them.
 Codex's usage needs no hooks: Clawdmeter reads the 5-hour and weekly limits
 Codex saves in its session logs, about once a minute and right after a Codex
 turn ends. That sends nothing over the network. The **Accounts** page lists
-Codex, and the device shows whichever of Claude and Codex moved last. Codex
+Codex, and the device shows whichever of Claude and Codex moved last; with
+the clock off, its title reads **Codex** or **Claude** to say which. Codex
 saves limits only when it signs in with ChatGPT, not with an API key.
 
 Hooks let Clawd react to activity and show alerts. The local event log
