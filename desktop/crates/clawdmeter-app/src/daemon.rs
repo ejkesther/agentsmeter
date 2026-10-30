@@ -185,6 +185,9 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
     let bt = Bluetooth::default();
     let mut wakeups = clawdmeter_ble::spawn_watcher(bt.clone());
     let mut last_settings = unix_now();
+    // Each Claude account's credentials file (modified time), to notice a
+    // new sign-in.
+    let mut sign_ins: std::collections::HashMap<PathBuf, Option<SystemTime>> = Default::default();
     let mut last_link_check = unix_now();
     let mut last_write_at = None;
     let mut chimes_muted = false;
@@ -247,6 +250,14 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                 }
                 engine.update_settings(s);
                 engine.set_claude_found(claude.is_some());
+            }
+            for dir in engine.settings().config_dirs.clone() {
+                let file = clawdmeter_core::oauth::credentials_file(&dir);
+                let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+                let changed = sign_ins.insert(dir.clone(), modified).is_some_and(|was| was != modified);
+                if changed && modified.is_some() && engine.on_sign_in(&dir, now) {
+                    log::info!("{}: new Claude Code sign-in; asking for its usage now", dir.display());
+                }
             }
         }
 

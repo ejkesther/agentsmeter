@@ -15,8 +15,10 @@ writes them to the device over BLE.
   does), `porting/`, `fonts.md`, `development.md`, `user-guide.md`,
   `daemon-parity.md` (the removed bash/Python daemons → the app).
 - `tools/`: asset converters, `ci/` (release and manifest scripts, with
-  unittests), `packaging/`. `research/clawd-official/`: the official Clawd
-  animation archive.
+  unittests), `packaging/`, `setup/windows.ps1` (one-command Windows setup:
+  the release's app, the agents and their sign-ins, hooks, Start at login;
+  `setup.cmd` at the root runs it). `research/clawd-official/`: the official
+  Clawd animation archive.
 - `docs/simulator.md`: simulator manual; `docs/sim-grid.md`: every panel at
   once (`tools/simgrid/`).
 

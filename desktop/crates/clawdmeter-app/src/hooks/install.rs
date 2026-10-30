@@ -63,6 +63,9 @@ pub const CURSOR_HOOKS: [HookSpec; 3] = [
     HookSpec { event: "stop", matcher: None, args: "event --agent cursor" },
 ];
 
+/// Codex skips new or changed hooks until the user trusts them.
+pub const CODEX_TRUST: &str = "Codex runs them once you trust them: type /hooks in Codex.";
+
 /// The hooks one agent gets.
 pub fn specs(agent: Agent) -> &'static [HookSpec] {
     match agent {

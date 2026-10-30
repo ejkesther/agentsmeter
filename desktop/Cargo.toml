@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.88"
-repository = "https://github.com/HermannBjorgvin/Clawdmeter"
+repository = "https://github.com/ejkesther/agentsmeter"
 
 [workspace.dependencies]
 clawdmeter-core = { path = "crates/clawdmeter-core" }

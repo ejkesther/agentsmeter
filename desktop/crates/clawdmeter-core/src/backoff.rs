@@ -13,8 +13,10 @@
 //! Polling inside that window gets nothing back, and polling right after it
 //! can trip the limit again, so a miss that may have reached the endpoint
 //! parks the account for [`RATE_LIMIT_FLOOR_SECS`], then longer on repeated
-//! misses ([`BACKOFF_STEPS`]), until a poll succeeds. Nothing bypasses it:
-//! device refresh requests and the tray's "Refresh now" wait too.
+//! misses ([`BACKOFF_STEPS`]), until a poll succeeds. Device refresh requests
+//! and the tray's "Refresh now" wait too. Only a new sign-in lifts a pause,
+//! and only one the server didn't ask for with a 429
+//! ([`crate::engine::Engine::on_sign_in`]).
 
 /// Claude Code's own 429 memory per bearer (about 600 s), so the shortest
 /// pause after a miss.

@@ -3,7 +3,7 @@
 //! the clock, and performs the writes it asks for.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -37,6 +37,9 @@ pub const CURSOR_READ_SECS: i64 = 300;
 pub const CURSOR_AFTER_STOP_SECS: i64 = 20;
 /// Never sooner than this after the last ask (s), whatever asks.
 pub const CURSOR_MIN_GAP_SECS: i64 = 60;
+/// While the editor isn't signed in, its database is checked this often
+/// (s), so a new sign-in shows soon: a local read that asks nothing.
+pub const CURSOR_SIGN_IN_SECS: i64 = 15;
 
 /// Why a write happens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,6 +346,22 @@ impl Engine {
         self.scheduler.request(now);
     }
 
+    /// Claude Code saved a new sign-in for `dir` (its credentials file
+    /// appeared or changed). A miss that wasn't the server's 429 (no sign-in,
+    /// a refused token, a slow first run) no longer holds: its backoff is
+    /// lifted and the account asked for now, still never within 2 min of its
+    /// last poll. A 429's pause stays, and a healthy account (Claude Code
+    /// renewing its token) needs nothing. True when it asked.
+    pub fn on_sign_in(&mut self, dir: &Path, now: i64) -> bool {
+        let Some(st) = self.accounts.get_mut(dir) else { return false };
+        if !st.last_error.as_ref().is_some_and(|e| !e.is_throttle()) {
+            return false;
+        }
+        st.backoff = crate::backoff::Backoff::default();
+        self.scheduler.request(now);
+        true
+    }
+
     /// A (re)connection: resend everything the device needs.
     pub fn on_connected(&mut self) {
         self.attention.reset();
@@ -450,15 +469,17 @@ impl Engine {
     }
 
     /// When Cursor's dashboard is next due, and why: at once the first time,
-    /// then every [`CURSOR_READ_SECS`], sooner after a Cursor Stop or a
-    /// refresh request, but never within [`CURSOR_MIN_GAP_SECS`] of the last
-    /// ask. `None` without Cursor.
+    /// then every [`CURSOR_READ_SECS`] ([`CURSOR_SIGN_IN_SECS`] while the
+    /// editor isn't signed in), sooner after a Cursor Stop or a refresh
+    /// request, but never within [`CURSOR_MIN_GAP_SECS`] of the last ask.
+    /// `None` without Cursor.
     fn cursor_due(&self, now: i64) -> Option<(i64, PollReason)> {
         let db = self.settings.cursor_db.as_ref()?;
+        let signed_out = self.accounts.get(db).and_then(|a| a.last_error.as_ref()) == Some(&UsageError::NoCursorSignIn);
         Some(self.agent_due(
             db,
             self.cursor_stop_at,
-            CURSOR_READ_SECS,
+            if signed_out { CURSOR_SIGN_IN_SECS } else { CURSOR_READ_SECS },
             CURSOR_AFTER_STOP_SECS,
             CURSOR_MIN_GAP_SECS,
             now,
@@ -1329,6 +1350,26 @@ mod tests {
         assert!(cursor_due(&mut e, T0 + 510), "then every 5 minutes");
     }
 
+    // Until the editor is signed in, its database is checked every 15 s (a
+    // local read), so a sign-in shows soon; then every 5 minutes again.
+    #[test]
+    fn cursor_is_checked_closely_until_signed_in() {
+        let (mut e, _, _, cursor) = with_cursor();
+        let signed_in = std::cell::Cell::new(false);
+        let answer = |d: &Path| match (d == cursor, signed_in.get()) {
+            (true, false) => Err(UsageError::NoCursorSignIn),
+            (true, true) => Ok(reading(2)),
+            _ => Ok(reading(5)),
+        };
+        assert!(poll(&mut e, T0, answer).contains(&cursor));
+        assert!(!poll(&mut e, T0 + 14, answer).contains(&cursor));
+        assert!(poll(&mut e, T0 + 15, answer).contains(&cursor), "every 15 s while signed out");
+        signed_in.set(true);
+        assert!(poll(&mut e, T0 + 30, answer).contains(&cursor));
+        assert!(!poll(&mut e, T0 + 45, answer).contains(&cursor), "then every 5 minutes");
+        assert!(poll(&mut e, T0 + 330, answer).contains(&cursor));
+    }
+
     // A tap on the device's corner: Claude → Codex → Cursor → Claude, sent
     // at once, and the pick stays on whoever moves after.
     #[test]
@@ -1556,6 +1597,32 @@ mod tests {
         // The user's own prompt starts a window: the probe, at once.
         e.on_hook_event(&mine(T0 + 4500), T0 + 4500);
         assert_eq!(plans(&mut e, T0 + 4500), vec![ProbePlan::Probe { usage_fallback: true }]);
+    }
+
+    // Signing in to Claude Code after a miss: no sign-in at first, then a
+    // slow first run that backed off, then the sign-in lands. It's asked for
+    // at once (2 min after its last poll at the earliest); a 429's pause and
+    // a healthy account's token renewal change nothing.
+    #[test]
+    fn a_new_sign_in_is_read_at_once() {
+        let mut e = Engine::new(settings(""));
+        let a = PathBuf::from("/h/.claude");
+        assert!(!e.on_sign_in(&a, T0), "never polled");
+        assert_eq!(poll(&mut e, T0, |_| Err(UsageError::NoSignIn)), vec![a.clone()]);
+        assert!(e.status(T0).errors[0].message.starts_with("No Claude Code sign-in found."));
+        assert!(e.on_sign_in(&a, T0 + 30));
+        assert!(e.begin_poll(T0 + 119).is_none(), "the 2-minute gap holds");
+        assert_eq!(poll(&mut e, T0 + 120, |_| Err(UsageError::Timeout)), vec![a.clone()]);
+        assert!(e.begin_poll(T0 + 300).is_none(), "the timeout backs off");
+        assert!(e.on_sign_in(&a, T0 + 300));
+        assert_eq!(
+            poll(&mut e, T0 + 300, |_| Err(UsageError::Throttled { retry_after_secs: Some(900) })),
+            vec![a.clone()]
+        );
+        assert!(!e.on_sign_in(&a, T0 + 400), "the server's pause holds");
+        assert!(e.begin_poll(T0 + 1199).is_none());
+        assert_eq!(poll(&mut e, T0 + 1200, |_| Ok(usage_reading(16))), vec![a.clone()]);
+        assert!(!e.on_sign_in(&a, T0 + 1300), "a renewed token on a healthy account");
     }
 
     // Only a 429 is saved as a block (and called a pause by Anthropic); a

@@ -59,7 +59,15 @@ Stable.
 
 ## Install
 
-Download the app from the [latest release](https://github.com/HermannBjorgvin/Clawdmeter/releases/latest).
+On Windows, one command sets everything up: the app, Claude Code, Codex and
+Cursor (each optional) with their sign-ins and hooks, and Start at login. The
+app then flashes and pairs the board:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/ejkesther/agentsmeter/main/tools/setup/windows.ps1 | iex"
+```
+
+From a clone, run `setup.cmd`. Or download the app from the [latest release](https://github.com/ejkesther/agentsmeter/releases/latest).
 
 | OS             | Package     | Install                                                                                                                          |
 | -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -67,7 +75,7 @@ Download the app from the [latest release](https://github.com/HermannBjorgvin/Cl
 | Windows        | `.msi`      | Run the installer. If SmartScreen blocks it, choose **More info → Run anyway**.                                                  |
 | Debian, Ubuntu | `.deb`      | `sudo apt install ./clawdmeter_<version>_amd64.deb`                                                                              |
 | Other Linux    | `.AppImage` | `chmod +x clawdmeter-*.AppImage`, then run it.                                                                                   |
-| NixOS, Nix     | Flake       | `nix run github:HermannBjorgvin/Clawdmeter`                                                                                      |
+| NixOS, Nix     | Flake       | `nix run github:ejkesther/agentsmeter`                                                                                           |
 
 The macOS and Windows packages aren't signed with a publisher certificate.
 See the [user guide](docs/user-guide.md#installation) for Linux requirements,

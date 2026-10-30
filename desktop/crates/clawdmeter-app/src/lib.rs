@@ -19,6 +19,7 @@ pub mod hooks;
 pub mod ipc;
 pub mod logger;
 pub mod onboarding;
+pub mod setup_cli;
 pub mod tray;
 pub mod ui;
 
@@ -119,10 +120,11 @@ pub fn tilde(path: &str, home: &std::path::Path) -> String {
 /// Which Claude Code reads usage, for display: the desktop app's own copy
 /// (with its version) or the executable's path.
 pub fn claude_label(claude: &std::path::Path, home: &std::path::Path) -> String {
-    use clawdmeter_core::usage::{desktop_claude_root, is_desktop_bundled};
+    use clawdmeter_core::usage::{desktop_claude_roots, is_desktop_bundled};
     if is_desktop_bundled(claude, home) {
-        let version = desktop_claude_root(home)
-            .and_then(|r| claude.strip_prefix(r).ok().and_then(|rest| rest.iter().next()).map(|v| v.to_owned()));
+        let version = desktop_claude_roots(home)
+            .iter()
+            .find_map(|r| claude.strip_prefix(r).ok().and_then(|rest| rest.iter().next()).map(|v| v.to_owned()));
         return match version {
             Some(v) => format!("the Claude desktop app's Claude Code {}", v.to_string_lossy()),
             None => "the Claude desktop app's Claude Code".into(),
@@ -148,7 +150,7 @@ mod tests {
     fn claude_labels() {
         let home = std::path::Path::new("/home/me");
         assert_eq!(claude_label(std::path::Path::new("/home/me/.local/bin/claude"), home), "~/.local/bin/claude");
-        if let Some(root) = clawdmeter_core::usage::desktop_claude_root(home) {
+        if let Some(root) = clawdmeter_core::usage::desktop_claude_roots(home).first() {
             assert_eq!(
                 claude_label(&root.join("2.1.295").join("71164c85f9d2").join("claude"), home),
                 "the Claude desktop app's Claude Code 2.1.295"

@@ -228,7 +228,7 @@ pub fn poll_idle(
         }
         (Some(r), _) => r,
         (None, Some(c)) => usage::poll_account(c, config_dir, home, now),
-        (None, None) => Err(UsageError::Spawn("no Claude Code sign-in or claude CLI found".into())),
+        (None, None) => Err(UsageError::NoSignIn),
     }
 }
 
@@ -302,6 +302,20 @@ mod tests {
         let now = Utc::now();
         assert_eq!(poll_idle(None, &cfg, &dir, now), Err(UsageError::TokenExpired));
         assert!(poll_idle(Some(&fake), &cfg, &dir, now).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // No sign-in to read and no CLI to ask (only the Claude desktop app):
+    // nothing is called, and the miss says what to do. A non-default dir,
+    // so a Mac's own Keychain entry is never read.
+    #[test]
+    fn no_sign_in_and_no_cli() {
+        let dir = std::env::temp_dir().join(format!("cm-nosignin-{}", std::process::id()));
+        let cfg = dir.join("work");
+        std::fs::create_dir_all(&cfg).unwrap();
+        assert_eq!(poll_idle(None, &cfg, &dir, Utc::now()), Err(UsageError::NoSignIn));
+        assert!(!UsageError::NoSignIn.is_transient() && !UsageError::NoSignIn.is_auth());
+        assert!(UsageError::NoSignIn.user_message(None).contains("run claude"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -28,7 +28,7 @@
 
     <Icon Id="ClawdmeterIcon" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="ClawdmeterIcon" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/HermannBjorgvin/Clawdmeter" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/ejkesther/agentsmeter" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
 

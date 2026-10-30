@@ -24,7 +24,7 @@ use super::widgets::{
 use super::{command, live_status, not_running_text, run_blocking, Navigate, REFRESH};
 use crate::diff::{line_diff, with_context, DiffLine};
 use crate::errors;
-use crate::hooks::install::{self as hooks, Agent, HookPlan, HookStatus};
+use crate::hooks::install::{self as hooks, Agent, HookPlan, HookStatus, CODEX_TRUST};
 use crate::ipc::{self, AppCommand, FirmwareRecord, StatusSnapshot};
 use crate::tilde;
 use crate::{boards, Page};
@@ -54,9 +54,6 @@ struct HookPreview {
     action: HookAction,
     plans: Vec<HookPlan>,
 }
-
-/// Codex skips new or changed hooks until the user trusts them.
-const CODEX_TRUST: &str = "Codex runs them once you trust them: type /hooks in Codex.";
 
 /// "Your original settings are kept in settings.json.bak." for the files
 /// `plans` replace; `None` when every one is new.
@@ -248,23 +245,15 @@ impl SettingsView {
                 ))
             }
         }
-        // Codex and Cursor get a row once installed (their folder exists);
-        // the installer never creates those folders.
-        let others = [(&self.paths.codex_home, Agent::Codex), (&self.paths.cursor_home, Agent::Cursor)];
-        let others = others.into_iter().filter(|(h, _)| h.is_dir());
-        self.hooks = self
-            .settings
-            .config_dirs
-            .iter()
-            .map(|d| (d, Agent::Claude))
-            .chain(others)
-            .map(|(d, agent)| HookRow {
-                dir: d.clone(),
-                agent,
+        self.hooks = crate::setup_cli::hook_targets(&self.paths, &self.settings)
+            .into_iter()
+            .map(|(dir, agent)| HookRow {
                 status: match &self.hook_exe {
-                    Some(exe) => hooks::dir_status(d, exe, agent),
+                    Some(exe) => hooks::dir_status(&dir, exe, agent),
                     None => HookStatus::Unreadable("Couldn't locate the Clawdmeter executable.".into()),
                 },
+                dir,
+                agent,
             })
             .collect();
         self.autostart_on = autostart::is_enabled(&self.paths.home, LaunchMode::Tray);

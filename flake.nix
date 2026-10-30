@@ -96,7 +96,7 @@
 
             meta = {
               description = "Desktop companion for the Clawdmeter Claude Code usage monitor";
-              homepage = "https://github.com/HermannBjorgvin/Clawdmeter";
+              homepage = "https://github.com/ejkesther/agentsmeter";
               license = lib.licenses.mit;
               mainProgram = "clawdmeter";
               platforms = systems;

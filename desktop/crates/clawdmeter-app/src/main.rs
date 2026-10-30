@@ -10,7 +10,7 @@
 // attach to the parent console instead (see `attach_console`).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use clawdmeter_app::{daemon, logger, tray, ui, Page};
+use clawdmeter_app::{daemon, logger, setup_cli, tray, ui, Page};
 use clawdmeter_core::Paths;
 
 const USAGE: &str = "\
@@ -28,6 +28,9 @@ OPTIONS:
                       flash, accounts, hooks, settings or setup
       [--manifest P]  flash page: use a local release manifest.json instead of GitHub
     --once            Poll /usage for every account once, print the payload, exit (no BLE)
+    --install-hooks   Install or update the hooks of every agent found (Claude Code,
+                      Codex, Cursor), as the Hooks page does
+    --start-at-login on|off   Turn Start at login on or off
     --ports           List attached Espressif USB ports
     --info PORT       Ask the firmware on PORT for its env/version
     hook MODE [event] Claude Code hook (MODE: alert, clear or event); reads the
@@ -84,6 +87,15 @@ fn main() {
             }
         }
         "--once" => daemon::once(&paths),
+        "--install-hooks" => setup_cli::install_hooks(&paths),
+        "--start-at-login" => match args.get(1).map(String::as_str) {
+            Some("on") => setup_cli::start_at_login(&paths, true),
+            Some("off") => setup_cli::start_at_login(&paths, false),
+            _ => {
+                eprintln!("--start-at-login takes on or off");
+                2
+            }
+        },
         "--ports" => {
             for p in clawdmeter_flash::device::list_ports() {
                 println!("{}  {:04x}:{:04x}  {}", p.path, p.vid, p.pid, p.serial_number.unwrap_or_default());

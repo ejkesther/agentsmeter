@@ -123,6 +123,10 @@ impl UsageReading {
 pub enum UsageError {
     /// `claude` could not be found or started.
     Spawn(String),
+    /// No token to read and no `claude` to ask: Claude Code was never
+    /// signed in on this computer outside the Claude desktop app, which
+    /// keeps its own sign-in to itself.
+    NoSignIn,
     /// The CLI ran longer than the timeout and was killed.
     Timeout,
     /// The CLI exited non-zero or printed something that isn't its JSON.
@@ -173,6 +177,7 @@ impl std::fmt::Display for UsageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             UsageError::Spawn(e) => write!(f, "could not run claude: {e}"),
+            UsageError::NoSignIn => write!(f, "no Claude Code sign-in or claude CLI found"),
             UsageError::Timeout => write!(f, "claude /usage timed out"),
             UsageError::BadOutput(e) => write!(f, "unexpected claude output: {e}"),
             UsageError::NotLoggedIn(e) => write!(f, "not logged in: {e}"),
@@ -253,9 +258,14 @@ impl UsageError {
             UsageError::Spawn(_) => {
                 "Couldn't run Claude Code. Check its installation and the claude_path setting.".into()
             }
+            UsageError::NoSignIn => "No Claude Code sign-in found. Install Claude Code and run claude in a terminal \
+                                     once to sign in; the Claude desktop app's own sign-in can't be read."
+                .into(),
             UsageError::Timeout => format!("Claude Code took too long to answer. {again}"),
             UsageError::BadOutput(_) => format!("Couldn't read Claude Code's usage response. {again}"),
-            UsageError::NotLoggedIn(_) => "Sign in to Claude Code for this account folder.".into(),
+            UsageError::NotLoggedIn(_) => "Sign in to Claude Code for this account folder: run claude in a terminal \
+                                           and log in. The Claude desktop app's own sign-in can't be read."
+                .into(),
             UsageError::NotSubscription => "This account doesn't report subscription usage limits.".into(),
             UsageError::NoUsageLines(_) => format!("No usage data was returned. {again}"),
             UsageError::RateLimited { .. } | UsageError::Throttled { .. } => {
@@ -583,41 +593,61 @@ fn next_occurrence<Z: TimeZone>(
 /// Locate the `claude` CLI: the configured path, then `PATH`, then the usual
 /// install locations (daemons under systemd/launchd get a thin `PATH`), then
 /// the newest copy the Claude desktop app downloaded for itself
-/// ([`desktop_claude_root`], [`newest_bundled_claude`]).
+/// ([`desktop_claude_roots`], [`newest_bundled_claude`]).
 pub fn find_claude(explicit: Option<&Path>, home: &Path) -> Option<PathBuf> {
     if explicit.is_some() {
         return find_cli(explicit, home);
     }
-    find_cli(None, home).or_else(|| newest_bundled_claude(&desktop_claude_root(home)?))
+    find_cli(None, home).or_else(|| newest_bundled_claude(&desktop_claude_roots(home)))
 }
 
 /// Where the Claude desktop app keeps the Claude Code builds it downloads:
 /// `<userData>/claude-code` (its `app.getPath("userData")`), i.e.
 /// `$XDG_CONFIG_HOME/Claude` or `~/.config/Claude` on Linux,
-/// `~/Library/Application Support/Claude` on macOS, `%APPDATA%\Claude` on
-/// Windows.
-pub fn desktop_claude_root(home: &Path) -> Option<PathBuf> {
-    let user_data = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/Claude")
+/// `~/Library/Application Support/Claude` on macOS. On Windows, see
+/// [`windows_desktop_roots`].
+pub fn desktop_claude_roots(home: &Path) -> Vec<PathBuf> {
+    if cfg!(target_os = "macos") {
+        vec![home.join("Library/Application Support/Claude/claude-code")]
     } else if cfg!(windows) {
-        PathBuf::from(std::env::var_os("APPDATA")?).join("Claude")
+        windows_desktop_roots(
+            std::env::var_os("APPDATA").map(PathBuf::from),
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        )
     } else {
-        std::env::var_os("XDG_CONFIG_HOME")
+        let config = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| home.join(".config"))
-            .join("Claude")
-    };
-    Some(user_data.join("claude-code"))
+            .unwrap_or_else(|| home.join(".config"));
+        vec![config.join("Claude/claude-code")]
+    }
+}
+
+/// The desktop app's `claude-code` dirs on Windows: `%APPDATA%\Claude`
+/// (Electron's userData), and each `%LOCALAPPDATA%\Claude-Data\<install>`,
+/// where current builds keep "your settings, your sign-in" (its README;
+/// seen on Windows 11 as `claude_<id>\claude-code\<version>\<hash>\claude.exe`).
+pub fn windows_desktop_roots(appdata: Option<PathBuf>, local_appdata: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = appdata.into_iter().map(|a| a.join("Claude").join("claude-code")).collect();
+    if let Some(dirs) = local_appdata.and_then(|l| std::fs::read_dir(l.join("Claude-Data")).ok()) {
+        let mut installs: Vec<PathBuf> =
+            dirs.filter_map(Result::ok).map(|e| e.path().join("claude-code")).filter(|p| p.is_dir()).collect();
+        installs.sort();
+        roots.extend(installs);
+    }
+    roots
 }
 
 /// The newest runnable Claude Code under the desktop app's `claude-code`
-/// dir. Builds live at `<version>/<checksum>/claude` (`claude.exe` on
+/// dirs. Builds live at `<version>/<checksum>/claude` (`claude.exe` on
 /// Windows; on macOS also `claude.app/Contents/MacOS/claude`). Versions sort
-/// numerically; a version with no runnable binary is skipped.
-pub fn newest_bundled_claude(root: &Path) -> Option<PathBuf> {
-    let mut versions: Vec<(Vec<u64>, PathBuf)> = std::fs::read_dir(root)
-        .ok()?
+/// numerically across every root; a version with no runnable binary is
+/// skipped.
+pub fn newest_bundled_claude(roots: &[PathBuf]) -> Option<PathBuf> {
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = roots
+        .iter()
+        .filter_map(|r| std::fs::read_dir(r).ok())
+        .flatten()
         .filter_map(Result::ok)
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
@@ -655,9 +685,9 @@ fn is_executable(p: &Path) -> bool {
     }
 }
 
-/// The desktop app's own copy of Claude Code (under [`desktop_claude_root`]).
+/// The desktop app's own copy of Claude Code (under [`desktop_claude_roots`]).
 pub fn is_desktop_bundled(claude: &Path, home: &Path) -> bool {
-    desktop_claude_root(home).is_some_and(|r| claude.starts_with(r))
+    desktop_claude_roots(home).iter().any(|r| claude.starts_with(r))
 }
 
 fn find_cli(explicit: Option<&Path>, home: &Path) -> Option<PathBuf> {
@@ -974,28 +1004,52 @@ mod tests {
     #[test]
     fn finds_the_newest_desktop_bundled_claude() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("cm-bundled-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let put = |rel: &str, exec: bool| {
-            let p = root.join(rel);
+        let base = std::env::temp_dir().join(format!("cm-bundled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, other) = (base.join("Claude/claude-code"), base.join("Claude-Data/claude_x/claude-code"));
+        let roots = [root.clone(), other.clone()];
+        let put = |dir: &Path, rel: &str, exec: bool| {
+            let p = dir.join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(&p, "#!/bin/sh\n").unwrap();
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(if exec { 0o755 } else { 0o644 })).unwrap();
             p
         };
-        assert_eq!(newest_bundled_claude(&root), None, "no dir");
-        let old = put("2.1.288/dc67a1d84fec/claude", true);
-        put("2.1.95/aaaaaaaaaaaa/claude", true);
-        assert_eq!(newest_bundled_claude(&root), Some(old.clone()), "2.1.288 beats 2.1.95");
+        assert_eq!(newest_bundled_claude(&roots), None, "no dir");
+        let old = put(&root, "2.1.288/dc67a1d84fec/claude", true);
+        put(&root, "2.1.95/aaaaaaaaaaaa/claude", true);
+        assert_eq!(newest_bundled_claude(&roots), Some(old.clone()), "2.1.288 beats 2.1.95");
         // A newer version without a runnable binary is skipped; junk dirs too.
-        put("2.1.300/bbbbbbbbbbbb/claude", false);
+        put(&root, "2.1.300/bbbbbbbbbbbb/claude", false);
         std::fs::create_dir_all(root.join("2.1.301/cccccccccccc")).unwrap();
         std::fs::create_dir_all(root.join("latest")).unwrap();
-        put("10.0.0-beta/dddddddddddd/claude", true);
-        assert_eq!(newest_bundled_claude(&root), Some(old));
-        let new = put("2.1.295/71164c85f9d2/claude", true);
-        assert_eq!(newest_bundled_claude(&root), Some(new));
-        let _ = std::fs::remove_dir_all(&root);
+        put(&root, "10.0.0-beta/dddddddddddd/claude", true);
+        assert_eq!(newest_bundled_claude(&roots), Some(old));
+        let new = put(&root, "2.1.295/71164c85f9d2/claude", true);
+        assert_eq!(newest_bundled_claude(&roots), Some(new));
+        // Another install's newer build wins: Windows has two homes.
+        let newer = put(&other, "2.1.309/9078b9c1d466/claude", true);
+        assert_eq!(newest_bundled_claude(&roots), Some(newer));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // Windows: Electron's userData, then every install under
+    // %LOCALAPPDATA%\Claude-Data that holds a claude-code dir.
+    #[test]
+    fn windows_desktop_roots_include_claude_data() {
+        let base = std::env::temp_dir().join(format!("cm-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (appdata, local) = (base.join("Roaming"), base.join("Local"));
+        let electron = appdata.join("Claude").join("claude-code");
+        assert_eq!(windows_desktop_roots(Some(appdata.clone()), Some(local.clone())), vec![electron.clone()]);
+        let data = local.join("Claude-Data");
+        let install = data.join("claude_pzs8sxrjxfjjc").join("claude-code");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(data.join("no-builds")).unwrap();
+        std::fs::write(data.join("README.txt"), "").unwrap();
+        assert_eq!(windows_desktop_roots(Some(appdata), Some(local)), vec![electron, install]);
+        assert_eq!(windows_desktop_roots(None, None), Vec::<PathBuf>::new());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[cfg(target_os = "linux")]
@@ -1005,9 +1059,9 @@ mod tests {
         // Only checks the default here: the test must not mutate the
         // process environment other tests read.
         if std::env::var_os("XDG_CONFIG_HOME").is_none() {
-            assert_eq!(desktop_claude_root(home), Some(PathBuf::from("/home/me/.config/Claude/claude-code")));
+            assert_eq!(desktop_claude_roots(home), vec![PathBuf::from("/home/me/.config/Claude/claude-code")]);
         }
-        assert!(is_desktop_bundled(&desktop_claude_root(home).unwrap().join("2.1.295/71164c85f9d2/claude"), home));
+        assert!(is_desktop_bundled(&desktop_claude_roots(home)[0].join("2.1.295/71164c85f9d2/claude"), home));
         assert!(!is_desktop_bundled(Path::new("/home/me/.local/bin/claude"), home));
     }
 

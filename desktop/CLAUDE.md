@@ -58,7 +58,13 @@ is faked behind `FlashHardware`.
 
 - Modes: no args = tray app (logs to `<state>/daemon.log`); `--daemon`
   headless; `--once` (poll + print payload, no BLE); `--window [PAGE]
-  [--manifest PATH]`; `--ports`; `--info PORT`; `hook MODE [event]`.
+  [--manifest PATH]`; `--ports`; `--info PORT`; `hook MODE [event]`;
+  `--install-hooks` and `--start-at-login on|off` (`setup_cli.rs`: the Hooks
+  page's install over `hook_targets`, which the page lists too, and
+  Settings → Start at login; `tools/setup/windows.ps1` runs them). The exe
+  is a windowed program on Windows: PowerShell waits for it, and sees its
+  output and exit code, only when its output is piped.
+- Releases come from `DEFAULT_RELEASE_REPO`, this fork (`ejkesther/agentsmeter`).
 - Env: `CLAWDMETER_LOG`, `CLAWDMETER_NO_TRAY`, `POLL_INTERVAL`,
   `CLAUDE_CONFIG_DIR` (default account), `CLAWDMETER_BLE_ADDRESS`,
   `CLAWDMETER_DECORATIONS`.
@@ -138,7 +144,9 @@ is faked behind `FlashHardware`.
   become session/week, both resetting at `billingCycleEnd`. It's the
   dashboard's own endpoint, not a documented API: an unknown shape is
   `NoCursorUsage`, never a zero. Asked every 5 min, 20 s after a Cursor Stop,
-  never within a minute of the last ask.
+  never within a minute of the last ask. While the editor isn't signed in
+  (`NoCursorSignIn`, no request made) the database is read every 15 s
+  (`CURSOR_SIGN_IN_SECS`), so a new sign-in shows soon.
 
 ## Agent switch
 
@@ -181,9 +189,17 @@ Per account (`probe.rs`, `oauth.rs`):
   Spend-capped accounts always use the idle source.
 - `claude` is found via `claude_path` → `PATH` / install dirs → the newest
   Claude-desktop-bundled build (`<userData>/claude-code/<version>/<hash>/claude`;
-  verified on Linux, the macOS/Windows paths come from the desktop app's code
-  and Electron's userData locations). With no `claude` there's no probe: the
-  endpoint is polled every 12 min, window or not.
+  verified on Linux, and on Windows 11 under
+  `%LOCALAPPDATA%\Claude-Data\<install>\claude-code` (`windows_desktop_roots`;
+  `%APPDATA%\Claude` is searched too); the macOS path comes from the desktop
+  app's code). With no `claude` there's no probe: the endpoint is polled
+  every 12 min, window or not.
+- The desktop app keeps its sign-in to itself: its Claude Code sessions get
+  their auth from the app, and nothing lands in `.credentials.json`. So a
+  desktop-only user has no token and, at best, a bundled `claude` that
+  answers "Not logged in" (in about 5 s; `NotLoggedIn`). With no token and
+  no `claude` at all the miss is `UsageError::NoSignIn`. Both messages tell
+  them to run `claude` in a terminal and log in.
 
 ## Cadence and backoff
 
@@ -199,8 +215,13 @@ Per account (`probe.rs`, `oauth.rs`):
 - Backoff (`backoff.rs`, idle source only): a 429 parks the account for
   exactly its `retry-after`; other transient misses (no 429 header, offline,
   `/usage` printing no `Current …` lines, timeouts) park it 10 → 20 → 30 min,
-  reset on success. Nothing bypasses it (Refresh now, device REQ and prompts
-  included); the probe is a separate path and stays allowed.
+  reset on success. Refresh now, device REQ and prompts wait too; the probe
+  is a separate path and stays allowed. Only a new sign-in lifts a pause,
+  and never a 429's: the daemon watches each account's credentials file
+  (`oauth::credentials_file`, every 5 s with the config) and a change calls
+  `Engine::on_sign_in`, which asks for the account at once (still 2 min
+  after its last poll). The first `claude` run after installing it can take
+  over the 30 s timeout while Windows scans the binary.
 - Calls during a block make the server lengthen it (589 → 1353 → 2721 →
   3600 s seen), so blocks are saved to `<state>/usage-blocks.json` and
   restored at start-up (`--once` honours them too). Only 429-type misses

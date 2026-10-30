@@ -6,7 +6,22 @@ See the [supported boards](../README.md#supported-boards).
 
 ## Installation
 
-Download the installer for your OS from the [latest release](https://github.com/HermannBjorgvin/Clawdmeter/releases/latest).
+On Windows, the setup script does the whole setup in one go. Run it from a
+clone (`setup.cmd`) or straight from GitHub:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/ejkesther/agentsmeter/main/tools/setup/windows.ps1 | iex"
+```
+
+It installs the app from the latest release (checking it against the
+release's `SHA256SUMS`), offers to install and sign in to Claude Code, Codex
+and Cursor with winget, installs their hooks (`clawdmeter --install-hooks`),
+turns on Start at login (`clawdmeter --start-at-login on`), reads each
+agent's usage once, and starts the app, whose setup flashes and pairs the
+board. Run it again any time: each step skips what's already done. Nothing
+needs admin rights, and sign-ins happen in your browser.
+
+Otherwise, download the installer for your OS from the [latest release](https://github.com/ejkesther/agentsmeter/releases/latest).
 The macOS and Windows packages are not signed with a publisher certificate.
 
 | OS | File | Install |
@@ -15,7 +30,7 @@ The macOS and Windows packages are not signed with a publisher certificate.
 | Windows | `clawdmeter-<version>-windows-x86_64.msi` | Run it. If SmartScreen stops it, click **More info → Run anyway**. Installs for your user only (no admin) with a Start Menu entry; newer versions upgrade in place. |
 | Debian, Ubuntu | `clawdmeter_<version>_amd64.deb` | `sudo apt install ./clawdmeter_<version>_amd64.deb` |
 | Other Linux | `clawdmeter-<version>-x86_64.AppImage` | `chmod +x clawdmeter-*.AppImage` and run it. Keep it in one place: Start at login opens the file. The Claude Code hooks run a copy of its binary in `~/.config/clawdmeter/appimage/`, renewed when the AppImage changes. |
-| NixOS, Nix | — | `nix run github:HermannBjorgvin/Clawdmeter`, or see [Nix](#nix). |
+| NixOS, Nix | — | `nix run github:ejkesther/agentsmeter`, or see [Nix](#nix). |
 
 Portable archives (`.tar.gz` for Linux and macOS, `.zip` for Windows) are on
 the same release if you'd rather not install anything.
@@ -32,7 +47,7 @@ package to your packages:
 
 ```nix
 # flake.nix
-inputs.clawdmeter.url = "github:HermannBjorgvin/Clawdmeter";
+inputs.clawdmeter.url = "github:ejkesther/agentsmeter";
 
 # NixOS module
 environment.systemPackages = [ inputs.clawdmeter.packages.${pkgs.stdenv.hostPlatform.system}.default ];
@@ -83,14 +98,34 @@ connecting to arbitrary nearby devices. On boards with a software-controlled
 PWR button, hold it for about 3 seconds, then release to clear the device's
 Bluetooth bonds. The LCD-4's PWR key resets the board; it does not clear pairing.
 
+## Agents
+
+Clawdmeter reads each agent's usage with that agent's own sign-in on this
+computer, so sign in to each one you want on the device:
+
+- **Claude Code**, signed in to an account that reports usage limits. If you
+  use Claude Code only inside the Claude desktop app, install it on its own
+  as well (`npm install -g @anthropic-ai/claude-code`, or Anthropic's
+  installer) and run `claude` once in a terminal to log in with the same
+  account: the desktop app keeps its sign-in to itself. Clawdmeter notices
+  the new sign-in within seconds.
+- **Codex**, signed in with ChatGPT (an API key reports no limits). Its usage
+  appears after Codex's first reply on this computer.
+- **Cursor**: the editor, signed in. Until it is, Clawdmeter checks its local
+  sign-in every 15 seconds, so the usage shows soon after you log in.
+
+Then install each one's hooks from the **Hooks** page (below) so Clawd reacts
+to it, and [switch between them](#switching-agents-on-the-device) on the device.
+
 ## Hooks and privacy
 
 Open **Hooks**, select the accounts to update, and review the changes to
-`settings.json` before saving. Changes Claude Code makes to the file while
-the review is open are kept. The first time a file is changed, the original
-is saved as `settings.json.bak`; later changes keep that backup. Other hooks
-remain in place. On macOS, move Clawdmeter to Applications before setting up
-hooks or Start at login; on Windows, extract it from the zip first.
+`settings.json`, then click **Install hooks** below them to save. Changes
+Claude Code makes to the file while the review is open are kept. The first
+time a file is changed, the original is saved as `settings.json.bak`; later
+changes keep that backup. Other hooks remain in place. On macOS, move
+Clawdmeter to Applications before setting up hooks or Start at login; on
+Windows, extract it from the zip first.
 
 If Codex is installed (`~/.codex`, or `$CODEX_HOME`), the page also lists
 its `hooks.json`. Codex's hooks make Clawd react to Codex sessions too, and
@@ -112,7 +147,8 @@ it signs in with ChatGPT, not with an API key.
 
 Cursor's usage needs no hooks either: with the Cursor editor's sign-in,
 Clawdmeter asks Cursor for the same summary its Plan & Usage page shows,
-about every 5 minutes and shortly after a Cursor turn ends. The device's
+about every 5 minutes and shortly after a Cursor turn ends (until the editor
+is signed in, it only checks for the sign-in, every 15 seconds). The device's
 cards then read **Auto** and **API**: the two monthly allowances, both
 resetting when your billing month ends. This isn't an official Cursor API,
 so it may stop working when Cursor changes its site; `cursor_usage = off`
@@ -235,7 +271,7 @@ seconds and preserves comments and unknown keys when saving.
 | `codex_usage` | `on` | While Codex is installed (`~/.codex` or `$CODEX_HOME`), read its 5-hour and weekly usage from its session logs and show it as one more account. `off` stops reading it. |
 | `cursor_usage` | `on` | While the Cursor editor is installed, read its Auto and API allowances from Cursor's dashboard with the editor's sign-in and show them as one more account. `off` stops reading it. |
 | `alert_on` | `permission, question, elicitation` | Which waits alert on the device and tray: `permission`, `question`, `idle`, `elicitation` (MCP input), or `none`. Set on the Hooks page. Other notification types follow `permission`. |
-| `release_repo` | `HermannBjorgvin/Clawdmeter` | GitHub repository used for firmware releases. |
+| `release_repo` | `ejkesther/agentsmeter` | GitHub repository used for firmware releases (this fork's carry the agent switch; the original project is `HermannBjorgvin/Clawdmeter`). |
 | `onboarding_done` | unset | `true` after setup is finished or skipped. |
 
 **Mute chimes** in the tray silences the alert chime and the desktop chime
@@ -260,8 +296,10 @@ Two sources are used per account:
   account's checks until exactly when the server says, across restarts and
   whatever asks (Refresh now included), because asking during the pause
   makes it longer; the app shows "Usage paused by Anthropic until HH:MM".
-  Other misses retry after 10, 20, then 30 minutes. Without any readable
-  sign-in it falls back to `claude -p /usage`.
+  Other misses retry after 10, 20, then 30 minutes, unless Claude Code saves
+  a new sign-in for that account first: then it asks at once. Without any
+  readable sign-in it falls back to `claude -p /usage`, and with no Claude
+  Code to run either, the app asks you to sign in (see [Agents](#agents)).
 
 Sending a message starts a session when none is running, so the message is
 only sent while a session is known to be running: its last known reset is
@@ -280,13 +318,16 @@ every 12 minutes.
 Claude Code is found through `claude_path`, then `PATH` and the usual install
 folders, then the copy the Claude desktop app downloads for itself (the newest
 version under its `claude-code` folder: `~/.config/Claude/claude-code` on
-Linux, verified; `~/Library/Application Support/Claude/claude-code` on macOS
-and `%APPDATA%\Claude\claude-code` on Windows, from the desktop app's code).
+Linux and `%LOCALAPPDATA%\Claude-Data\<install>\claude-code` on Windows,
+verified; `~/Library/Application Support/Claude/claude-code` on macOS and
+`%APPDATA%\Claude\claude-code` for older Windows builds, from the desktop
+app's code). That copy reads only a sign-in Claude Code saved itself.
 Settings → Advanced and the Accounts page say which one is in use. Without
 Claude Code, usage still updates every 12 minutes from the usage endpoint.
 
 Every trigger, including manual refresh, respects a two-minute minimum gap
-and any retry delay. Transient failures delay retries by 10, 20, then 30
+and any retry delay; only a new sign-in ends a delay, and never one
+Anthropic asked for. Transient failures delay retries by 10, 20, then 30
 minutes. A failed check never becomes a zero reading. Heartbeats stop once
 the selected reading is stale, allowing the device to show the loss of fresh data.
 
@@ -296,6 +337,8 @@ the selected reading is stale, allowing the device to show the loss of fresh dat
 clawdmeter                      Run the tray app
 clawdmeter --daemon             Run without a tray or window
 clawdmeter --once               Read usage once and print the payload; no Bluetooth
+clawdmeter --install-hooks      Install or update every agent's hooks, as the Hooks page does
+clawdmeter --start-at-login on|off   Turn Start at login on or off
 clawdmeter --window [PAGE]       Open overview, device, flash, accounts, hooks, settings, or setup
 clawdmeter --ports              List attached Espressif USB ports
 clawdmeter --info PORT          Read the board and firmware version over USB

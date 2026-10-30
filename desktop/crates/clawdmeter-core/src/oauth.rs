@@ -24,7 +24,7 @@
 //! ([`crate::probe::poll_idle`]). A 429 parks the account for exactly the
 //! `retry-after` the server sends.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -121,8 +121,13 @@ fn pick_token(found: impl IntoIterator<Item = Option<Token>>, now: i64) -> Optio
     found.iter().find(|t| !t.expired(now)).or(found.first()).cloned()
 }
 
+/// Where Claude Code saves an account's sign-in outside the macOS Keychain.
+pub fn credentials_file(config_dir: &Path) -> PathBuf {
+    config_dir.join(".credentials.json")
+}
+
 fn file_token(config_dir: &Path) -> Option<Token> {
-    parse_credentials(&std::fs::read_to_string(config_dir.join(".credentials.json")).ok()?)
+    parse_credentials(&std::fs::read_to_string(credentials_file(config_dir)).ok()?)
 }
 
 /// Read one account's token (never refreshing it). macOS: the Keychain,
