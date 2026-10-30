@@ -268,11 +268,11 @@ impl SetupView {
 
     fn pair(&self, t: &Theme, cx: &Context<Self>) -> gpui::Div {
         let how = if cfg!(target_os = "macos") {
-            "Open System Settings → Bluetooth and click Connect next to Clawdmeter."
+            "Open System Settings → Bluetooth and click Connect next to Agentsmeter."
         } else if cfg!(windows) {
-            "Open Settings → Bluetooth & devices → Add device → Bluetooth, and choose Clawdmeter."
+            "Open Settings → Bluetooth & devices → Add device → Bluetooth, and choose Agentsmeter."
         } else {
-            "Open your desktop's Bluetooth settings and pair Clawdmeter. From a terminal: bluetoothctl, then \
+            "Open your desktop's Bluetooth settings and pair Agentsmeter. From a terminal: bluetoothctl, then \
              scan on, pair <address> and trust <address>."
         };
         let status = match (self.running, self.connected) {
@@ -295,7 +295,7 @@ impl SetupView {
             .child(Self::title("Pair over Bluetooth"))
             .child(div().max_w(px(500.)).text_center().child(para(
                 t,
-                "Pair Clawdmeter in your computer's Bluetooth settings. It appears as a keyboard so its buttons can \
+                "Pair Agentsmeter in your computer's Bluetooth settings. It appears as a keyboard so its buttons can \
                  send key presses.",
             )))
             .child(

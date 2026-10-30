@@ -60,7 +60,7 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-pub use clawdmeter_core::DEVICE_NAME;
+pub use clawdmeter_core::{DEVICE_NAME, DEVICE_NAMES};
 
 /// Custom data service.
 pub const SERVICE_UUID: Uuid = Uuid::from_u128(0x4c41555a_4465_7669_6365_000000000001);
@@ -97,7 +97,7 @@ impl std::fmt::Display for LinkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LinkError::NoAdapter(s) => write!(f, "no Bluetooth adapter: {s}"),
-            LinkError::NotFound => write!(f, "no paired {DEVICE_NAME} found"),
+            LinkError::NotFound => write!(f, "no paired {} found", DEVICE_NAMES.join(" or ")),
             LinkError::Ble(e) => write!(f, "BLE error: {e}"),
             LinkError::Timeout(what) => write!(f, "timed out during {what}"),
             LinkError::MissingCharacteristic => write!(f, "device has no Clawdmeter RX characteristic"),
@@ -330,9 +330,9 @@ pub(crate) async fn describe(p: Peripheral) -> Candidate {
 }
 
 /// True when a candidate is ours: the custom service alone is enough; the
-/// HID service (shared with every keyboard) needs the exact name.
+/// HID service (shared with every keyboard) needs one of the exact names.
 pub fn accept(name: Option<&str>, has_service: bool) -> bool {
-    has_service || name == Some(DEVICE_NAME)
+    has_service || name.is_some_and(|n| DEVICE_NAMES.contains(&n))
 }
 
 /// Pick among accepted candidates: the cached key first, else the first.
@@ -711,14 +711,16 @@ async fn bonded_by_address(adapter: &Adapter, cached: Option<&str>) -> Vec<Candi
     out
 }
 
-/// The bonded Clawdmeter's MAC from the Windows PnP table (the Windows
-/// daemon's `Get-PnpDevice` lookup). `None` on any failure.
+/// The bonded board's MAC from the Windows PnP table (the Windows daemon's
+/// `Get-PnpDevice` lookup), by either name: Windows keeps the name a board
+/// had when it was paired. `None` on any failure.
 #[cfg(windows)]
 fn windows_pnp_address() -> Option<String> {
     use std::os::windows::process::CommandExt;
+    let names = DEVICE_NAMES.map(|n| format!("'{n}'")).join(",");
     let script = format!(
         "Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | \
-         Where-Object {{ $_.FriendlyName -eq '{DEVICE_NAME}' }} | Select-Object -ExpandProperty InstanceId"
+         Where-Object {{ $_.FriendlyName -in @({names}) }} | Select-Object -ExpandProperty InstanceId"
     );
     let out = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -772,11 +774,11 @@ fn macos_unpair_stale_bond() {
         );
         return;
     };
-    match blueutil_paired_address(&paired, DEVICE_NAME) {
-        Some(addr) if run(&["--unpair", &addr]).is_some() => {
-            log::info!("unpaired the stale bond for '{DEVICE_NAME}' [{addr}]; it re-pairs on the next connect")
+    match DEVICE_NAMES.iter().find_map(|n| blueutil_paired_address(&paired, n).map(|a| (*n, a))) {
+        Some((name, addr)) if run(&["--unpair", &addr]).is_some() => {
+            log::info!("unpaired the stale bond for '{name}' [{addr}]; it re-pairs on the next connect")
         }
-        Some(addr) => log::warn!("blueutil could not unpair {addr}"),
+        Some((_, addr)) => log::warn!("blueutil could not unpair {addr}"),
         None => log::info!("no paired '{DEVICE_NAME}' to unpair"),
     }
 }
@@ -1005,7 +1007,8 @@ mod tests {
     #[test]
     fn acceptance_rules() {
         assert!(accept(None, true));
-        assert!(accept(Some("Clawdmeter"), false));
+        assert!(accept(Some("Agentsmeter"), false));
+        assert!(accept(Some("Clawdmeter"), false), "boards on firmware from before the rename");
         assert!(!accept(Some("Keychron K2"), false));
         assert!(!accept(Some("clawdmeter"), false));
         assert!(!accept(None, false));

@@ -4,7 +4,9 @@
 #include <NimBLEHIDDevice.h>
 #include <Preferences.h>
 
-#define DEVICE_NAME "Clawdmeter"
+// This fork's name; firmware before the rename (and the original
+// Clawdmeter's) advertises "Clawdmeter", which the app still accepts.
+#define DEVICE_NAME "Agentsmeter"
 
 // Custom GATT UUIDs for data channel
 #define SERVICE_UUID        "4c41555a-4465-7669-6365-000000000001"
@@ -155,8 +157,8 @@ static void start_advertising() {
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->reset();
     // Primary advertising packet (≤31 bytes):
-    //   flags (3) + appearance (4) + HID service 0x1812 (4) + name "Clawdmeter" (12)
-    //   = 23 bytes. macOS Bluetooth Settings only surfaces BLE-only devices
+    //   flags (3) + appearance (4) + HID service 0x1812 (4) + name "Agentsmeter" (13)
+    //   = 24 bytes. macOS Bluetooth Settings only surfaces BLE-only devices
     //   that explicitly advertise the standard HID service UUID (0x1812) —
     //   without it the device is recognized internally but hidden from the
     //   GUI nearby-devices list.
@@ -338,7 +340,7 @@ void ble_init(void) {
     // --- HID keyboard service ---
     hid_dev = new NimBLEHIDDevice(server);
     hid_dev->setReportMap((uint8_t*)HID_REPORT_MAP, sizeof(HID_REPORT_MAP));
-    hid_dev->setManufacturer("Clawdmeter");
+    hid_dev->setManufacturer(DEVICE_NAME);
     // PnP ID: (vendorIdSource, vendorId, productId, version).
     // Source 1 = Bluetooth SIG, vendor 0x02E5 = Espressif. Don't claim
     // Apple's IDs (USB vendor 0x05AC): macOS validates Apple-claimed HIDs

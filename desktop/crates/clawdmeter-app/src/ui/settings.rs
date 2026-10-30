@@ -333,7 +333,7 @@ impl SettingsView {
                 v.device.unpair = Some(match r {
                     Ok(Some(_)) => (
                         Tone::Ok,
-                        "The board's pairing is cleared. Remove Clawdmeter from this computer's Bluetooth settings, \
+                        "The board's pairing is cleared. Remove Agentsmeter (or Clawdmeter) from this computer's Bluetooth settings, \
                          then pair it again."
                             .into(),
                     ),

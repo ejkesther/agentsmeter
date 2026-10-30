@@ -85,13 +85,15 @@ connect the board, select the image at address `0x0`, and choose **Program**.
 
 ## Pair over Bluetooth
 
-Pair **Clawdmeter** in your computer's Bluetooth settings. It appears as a
-keyboard because its buttons send key presses.
+Pair **Agentsmeter** in your computer's Bluetooth settings (firmware from
+before the rename calls the board **Clawdmeter**, and a computer keeps the
+name a board had when it was paired). It appears as a keyboard because its
+buttons send key presses.
 
 - Linux: use the desktop Bluetooth settings, or run `bluetoothctl`, then
   `scan on`, `pair <MAC>`, and `trust <MAC>`.
-- macOS: System Settings → Bluetooth → **Connect** next to Clawdmeter.
-- Windows: Settings → Bluetooth & devices → Add device → Bluetooth → Clawdmeter.
+- macOS: System Settings → Bluetooth → **Connect** next to Agentsmeter.
+- Windows: Settings → Bluetooth & devices → Add device → Bluetooth → Agentsmeter.
 
 For normal operation, the app looks for an OS-known Clawdmeter rather than
 connecting to arbitrary nearby devices. On boards with a software-controlled

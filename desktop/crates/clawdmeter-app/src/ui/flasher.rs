@@ -1084,7 +1084,7 @@ impl FlasherView {
                 if self.connected {
                     "Bluetooth connected."
                 } else {
-                    "If the board isn't paired yet, choose Clawdmeter in your Bluetooth settings."
+                    "If the board isn't paired yet, choose Agentsmeter in your Bluetooth settings."
                 },
             )))
             .when(!self.connected, |d| d.child(pill(t, "Waiting for Bluetooth connection", Tone::Accent)))

@@ -41,7 +41,8 @@ is faked behind `FlashHardware`.
   watcher reopens on a bump, and dead streams are leaked, not dropped
   (`MessageStream::drop` unwraps a `RemoveMatch`, which panics on a dead
   connection and aborts release builds). Connects only to OS-known
-  devices (custom service, or HID + exact name); address cache, REQ
+  devices (custom service, or HID + one of `DEVICE_NAMES`: Agentsmeter, and
+  Clawdmeter from firmware before the rename); address cache, REQ
   subscription, zombie-write breaker, BlueZ trust, macOS stale-bond unpair via `blueutil`,
   Windows bonded-address fallback (PnP / `CLAWDMETER_BLE_ADDRESS`).
 - `clawdmeter-flash`: downloads the release `manifest.json`, matches boards by

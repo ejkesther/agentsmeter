@@ -48,7 +48,11 @@ pub use payload::Payload;
 pub use usage::{UsageError, UsageReading, Window};
 
 /// The device's advertised name.
-pub const DEVICE_NAME: &str = "Clawdmeter";
+pub const DEVICE_NAME: &str = "Agentsmeter";
+
+/// Every name a board answers to: this fork's, then the one firmware from
+/// before the rename (and the original Clawdmeter's) advertises.
+pub const DEVICE_NAMES: [&str; 2] = [DEVICE_NAME, "Clawdmeter"];
 
 /// Unix seconds now.
 pub fn unix_now() -> i64 {

@@ -92,8 +92,8 @@ On Windows, the setup command above does all of this for you.
 1. Launch Agentsmeter and follow setup. Connect the board with a USB data
    cable, check the selected board, and install firmware.
 2. Pair the board in your computer's Bluetooth settings, where it's listed
-   as **Clawdmeter**. It appears as a keyboard because its buttons send key
-   presses.
+   as **Agentsmeter** (**Clawdmeter** on older firmware). It appears as a
+   keyboard because its buttons send key presses.
 3. Open **Hooks** to let Clawd react to Claude Code, Codex and Cursor and
    alert when a session needs an answer. Review the changes, then click
    **Install hooks**. Usage meters work without hooks.
@@ -135,8 +135,9 @@ This fork adds:
   releases from this repository.
 
 Clawd is Anthropic's mascot; his animations on the device come from
-Anthropic's official ones. The app's files and settings and the board's
-Bluetooth name keep the Clawdmeter name, so existing setups keep working.
+Anthropic's official ones. The app's files and settings keep the Clawdmeter
+name, so existing setups keep working, and the app still finds boards whose
+older firmware calls them Clawdmeter over Bluetooth.
 
 ## Licensing gray area warning
 
