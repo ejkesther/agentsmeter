@@ -155,7 +155,7 @@ fn run_daemon(paths: Paths) -> i32 {
     let _lock = match clawdmeter_app::ipc::acquire_instance_lock(&paths) {
         Ok(Some(f)) => Some(f),
         Ok(None) => {
-            eprintln!("Clawdmeter is already running (tray app or --daemon); not starting a second daemon");
+            eprintln!("Agentsmeter is already running (tray app or --daemon); not starting a second daemon");
             return 1;
         }
         Err(e) => {
@@ -171,7 +171,7 @@ fn run_daemon(paths: Paths) -> i32 {
         }
     };
     rt.block_on(async move {
-        log::info!("=== Clawdmeter daemon {} ===", clawdmeter_app::version());
+        log::info!("=== Agentsmeter daemon {} ===", clawdmeter_app::version());
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (st_tx, _st_rx) = tokio::sync::watch::channel(daemon::Status::default());
         tokio::spawn(async move {

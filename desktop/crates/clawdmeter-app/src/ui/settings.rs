@@ -250,7 +250,7 @@ impl SettingsView {
             .map(|(dir, agent)| HookRow {
                 status: match &self.hook_exe {
                     Some(exe) => hooks::dir_status(&dir, exe, agent),
-                    None => HookStatus::Unreadable("Couldn't locate the Clawdmeter executable.".into()),
+                    None => HookStatus::Unreadable("Couldn't locate the Agentsmeter executable.".into()),
                 },
                 dir,
                 agent,
@@ -372,10 +372,10 @@ impl SettingsView {
     /// The binary to set the hooks (`hooks`) or the login entry up with,
     /// or why not.
     fn launchable(&self, hooks: bool) -> Result<PathBuf, String> {
-        let missing = || "Couldn't locate the Clawdmeter executable.".to_owned();
+        let missing = || "Couldn't locate the Agentsmeter executable.".to_owned();
         let exe = self.launch_exe.clone().ok_or_else(missing)?;
         if let Some(u) = clawdmeter_core::launch::unstable(&exe) {
-            return Err(format!("Clawdmeter is running from {}. {}", u.location_noun(), u.advice()));
+            return Err(format!("Agentsmeter is running from {}. {}", u.location_noun(), u.advice()));
         }
         if hooks {
             self.hook_exe.clone().ok_or_else(missing)
@@ -452,11 +452,11 @@ impl SettingsView {
 
     fn send_test_alert(&mut self, cx: &mut Context<Self>) {
         let path = self.paths.attention_file();
-        let body = serde_json::json!({"m": "Clawdmeter test alert", "s": clawdmeter_core::attention::TEST_SESSION});
+        let body = serde_json::json!({"m": "Agentsmeter test alert", "s": clawdmeter_core::attention::TEST_SESSION});
         let written =
             std::fs::create_dir_all(&self.paths.state_dir).and_then(|_| std::fs::write(&path, body.to_string()));
         self.test_alert = Some(match written {
-            Ok(()) if self.snap.is_none() => Err("Clawdmeter isn't running.".into()),
+            Ok(()) if self.snap.is_none() => Err("Agentsmeter isn't running.".into()),
             Ok(()) => Ok(()),
             Err(e) => Err(format!("Couldn't send it. {}", errors::io_message(&e))),
         });
@@ -504,12 +504,12 @@ impl SettingsView {
         };
         let update = snap.as_ref().and_then(|s| s.update_available().map(str::to_owned));
         let (link_tone, link): (Tone, SharedString) = match snap.as_ref() {
-            None => (Tone::Plain, "Clawdmeter isn't running".into()),
+            None => (Tone::Plain, "Agentsmeter isn't running".into()),
             Some(s) => match s.link.as_str() {
                 "connected" => (Tone::Ok, "Bluetooth connected".into()),
                 "no_adapter" => (Tone::Bad, "Bluetooth unavailable".into()),
                 "connecting" => (Tone::Accent, "Connecting…".into()),
-                _ => (Tone::Plain, "Looking for Clawdmeter".into()),
+                _ => (Tone::Plain, "Looking for the device".into()),
             },
         };
         let usb: SharedString = match (&self.device.port, self.device.probing) {
@@ -700,7 +700,7 @@ impl SettingsView {
         pane = pane.child(field(
             t,
             "Clear saved device",
-            "Clears the app's saved address and searches for a paired Clawdmeter. Bluetooth pairing stays in place.",
+            "Clears the app's saved address and searches for a paired board. Bluetooth pairing stays in place.",
             button(t, "forget", "Clear", ButtonKind::Small, true, move |_, _, _| command(&p, AppCommand::Forget)),
         ));
         let on_usb = self.device.port.is_some();
@@ -769,7 +769,7 @@ impl SettingsView {
                 (Some(e), _) => (e.message.clone(), Some(pill(t, "Needs attention", Tone::Bad))),
                 (None, true) => (String::new(), Some(pill(t, "On device", Tone::Ok))),
                 (None, false) if self.snap.is_some() => ("Not selected for the device".to_string(), None),
-                (None, false) => ("Start Clawdmeter to check usage.".to_string(), None),
+                (None, false) => ("Start Agentsmeter to check usage.".to_string(), None),
             };
             let me = cx.entity().downgrade();
             let dir = d.clone();
@@ -847,7 +847,7 @@ impl SettingsView {
                 (Some(e), _) => (e.message.clone(), None),
                 (None, true) => (String::new(), Some(pill(t, "On device", Tone::Ok))),
                 (None, false) if self.snap.is_some() => ("Not selected for the device".to_string(), None),
-                (None, false) => ("Start Clawdmeter to check usage.".to_string(), None),
+                (None, false) => ("Start Agentsmeter to check usage.".to_string(), None),
             };
             let row = div()
                 .flex()
@@ -915,12 +915,12 @@ impl SettingsView {
                     Some(("Review removal", HookAction::Remove)),
                 ),
                 HookStatus::Missing => (
-                    "Clawdmeter hooks are not installed. Other hooks are kept.".into(),
+                    "Agentsmeter hooks are not installed. Other hooks are kept.".into(),
                     ("Not installed", Tone::Plain),
                     Some(("Review install", HookAction::Install)),
                 ),
                 HookStatus::Legacy => (
-                    "Uses attention-hook.sh. Update to the built-in Clawdmeter hooks.".into(),
+                    "Uses attention-hook.sh. Update to the built-in Agentsmeter hooks.".into(),
                     ("Legacy hooks", Tone::Warn),
                     Some(("Review update", HookAction::Install)),
                 ),
@@ -928,7 +928,7 @@ impl SettingsView {
                     if let Some(u) = clawdmeter_core::launch::unstable(Path::new(old)) {
                         format!("Runs {}, {}.", tilde(old, &self.paths.home), u.location())
                     } else if Path::new(old).exists() {
-                        format!("Uses another Clawdmeter executable: {}.", tilde(old, &self.paths.home))
+                        format!("Uses another Agentsmeter executable: {}.", tilde(old, &self.paths.home))
                     } else {
                         format!("Runs {}, which no longer exists.", tilde(old, &self.paths.home))
                     },
@@ -1155,7 +1155,7 @@ impl SettingsView {
         let mut pane = div().flex().flex_col().gap(px(6.)).child(heading(t, "Settings")).child(field(
             t,
             "Start at login",
-            "Opens Clawdmeter when you sign in.",
+            "Opens Agentsmeter when you sign in.",
             toggle(t, "autostart", on, true, move |_, _, cx| {
                 let home = home.clone();
                 let _ = me.update(cx, |v, cx| {
@@ -1184,7 +1184,7 @@ impl SettingsView {
                     tilde(&o.display().to_string(), &self.paths.home)
                 ),
                 Some(o) => format!(
-                    "Start at login opens another copy of Clawdmeter: {}.",
+                    "Start at login opens another copy of Agentsmeter: {}.",
                     tilde(&o.display().to_string(), &self.paths.home)
                 ),
                 None => "Start at login can't be read.".into(),
@@ -1279,8 +1279,8 @@ impl SettingsView {
         let p = self.paths.clone();
         pane = pane.child(field(
             t,
-            "Quit Clawdmeter",
-            "Stops usage updates and closes Clawdmeter. The device retains its last reading.",
+            "Quit Agentsmeter",
+            "Stops usage updates and closes Agentsmeter. The device retains its last reading.",
             button(t, "quit", "Quit", ButtonKind::Small, self.snap.is_some(), move |_, window, _| {
                 command(&p, AppCommand::Quit);
                 window.remove_window();
@@ -1293,7 +1293,7 @@ impl SettingsView {
                 t,
                 "Legacy service detected",
                 format!(
-                    "Disable {} so only one Clawdmeter process connects to the device.",
+                    "Disable {} so only one Agentsmeter process connects to the device.",
                     tilde(&legacy.describe(), &self.paths.home)
                 ),
                 button(t, "legacy", "Disable legacy service", ButtonKind::Primary, true, move |_, _, cx| {
@@ -1350,7 +1350,7 @@ impl SettingsView {
                 match &claude {
                     Some(c) => format!("Usage is read with {}.", crate::claude_label(Path::new(c), &self.paths.home)),
                     None if self.snap.is_some() => "Not found.".into(),
-                    None => "Start Clawdmeter to detect Claude Code.".into(),
+                    None => "Start Agentsmeter to detect Claude Code.".into(),
                 },
                 div(),
             ));
@@ -1385,7 +1385,7 @@ impl SettingsView {
 
 /// What a new config file starts with: the keys people reach for, commented.
 const CONFIG_TEMPLATE: &str = "\
-# Clawdmeter settings: key = value. The app re-reads this file within a few seconds.
+# Agentsmeter settings: key = value. The app re-reads this file within a few seconds.
 # claude_path = /path/to/claude
 # config_dirs = ~/.claude, ~/.claude-work
 # heartbeat_interval = 60
@@ -1626,7 +1626,7 @@ mod tests {
         assert!(paths.attention_file().exists());
         // No app-status.json: the app isn't running to pick it up.
         view.read_with(cx, |v, _| {
-            assert_eq!(v.test_alert, Some(Err("Clawdmeter isn't running.".into())));
+            assert_eq!(v.test_alert, Some(Err("Agentsmeter isn't running.".into())));
             assert!(v.hook_msg.is_none(), "no banner");
         });
         cx.executor().advance_clock(TEST_ALERT_FAILED);

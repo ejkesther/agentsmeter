@@ -236,7 +236,7 @@ impl SetupView {
             .gap(px(16.))
             .pt(px(24.))
             .child(clawd(7.))
-            .child(Self::title("Set up Clawdmeter"))
+            .child(Self::title("Set up Agentsmeter"))
             .child(div().max_w(px(460.)).text_center().child(para(
                 t,
                 "See your Claude Code usage on your desk. Clawd reacts to activity and alerts you when a session \
@@ -281,7 +281,7 @@ impl SetupView {
             (false, false) => notice(
                 t,
                 Tone::Plain,
-                "The background process isn't running. Pair the device, then start Clawdmeter to check the connection.",
+                "The background process isn't running. Pair the device, then start Agentsmeter to check the connection.",
             )
             .w(px(520.))
             .into_any_element(),
@@ -382,7 +382,7 @@ impl SetupView {
         let after = match (self.running, self.windowed) {
             (false, _) => None,
             (true, true) => Some("Keep this window open to update usage."),
-            (true, false) => Some("Clawdmeter keeps running in the tray. Open it there to view usage or settings."),
+            (true, false) => Some("Agentsmeter keeps running in the tray. Open it there to view usage or settings."),
         };
         div()
             .flex()
@@ -506,7 +506,7 @@ impl Render for SetupView {
             Step::Done => right.child(button(
                 &t,
                 "setup-finish",
-                "Open Clawdmeter",
+                "Open Agentsmeter",
                 ButtonKind::Primary,
                 true,
                 cx.listener(|v, _, _, cx| v.finish(cx)),

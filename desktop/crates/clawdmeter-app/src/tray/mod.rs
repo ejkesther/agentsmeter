@@ -78,16 +78,16 @@ impl Items {
     fn new() -> Self {
         let it = Items {
             menu: Menu::new(),
-            status: MenuItem::new("Clawdmeter · Starting", false, None),
+            status: MenuItem::new("Agentsmeter · Starting", false, None),
             account: MenuItem::new("No usage data yet", false, None),
             session: MenuItem::new("Session  –", false, None),
             weekly: MenuItem::new("Weekly  –", false, None),
             refresh: MenuItem::new("Refresh usage", true, None),
             mute: CheckMenuItem::new("Mute chimes", true, false, None),
-            open: MenuItem::new("Open Clawdmeter", true, None),
+            open: MenuItem::new("Open Agentsmeter", true, None),
             update: MenuItem::new("Flash firmware…", true, None),
             settings: MenuItem::new("Settings…", true, None),
-            quit: MenuItem::new("Quit Clawdmeter", true, None),
+            quit: MenuItem::new("Quit Agentsmeter", true, None),
         };
         let _ = it.menu.append_items(&[
             &it.status,
@@ -114,7 +114,7 @@ impl Items {
         if snap.link == "no_adapter" {
             label = "Bluetooth unavailable".into();
         }
-        self.status.set_text(format!("Clawdmeter · {label}"));
+        self.status.set_text(format!("Agentsmeter · {label}"));
         let account = snap.agent.clone().or_else(|| snap.account.as_deref().map(|a| tilde(a, &paths.home)));
         self.account.set_text(match (account, snap.age(now)) {
             (Some(a), Some(age)) => format!("{a} · updated {}", ago(age)),
@@ -153,7 +153,7 @@ fn icon_for(state: TrayState) -> Option<Icon> {
 }
 
 fn tooltip(snap: &StatusSnapshot) -> String {
-    let mut t = format!("Clawdmeter · {}", snap.tray_state().label());
+    let mut t = format!("Agentsmeter · {}", snap.tray_state().label());
     if let (Some(s), Some(w)) = (snap.session_pct, snap.week_pct) {
         t.push_str(&format!(" · Session {s}% · Weekly {w}%"));
     }
@@ -328,7 +328,7 @@ impl TrayApp {
         let built = TrayIconBuilder::new()
             .with_id("clawdmeter")
             .with_menu(Box::new(items.menu.clone()))
-            .with_tooltip("Clawdmeter")
+            .with_tooltip("Agentsmeter")
             .with_icon(icon_for(TrayState::Searching).expect("icon"))
             .build();
         match built {
@@ -428,7 +428,7 @@ pub fn run(paths: Paths) -> i32 {
         Ok(None) => {
             // Already running: show its window instead of starting a second
             // daemon. (A headless `--daemon` holder ignores this.)
-            log::info!("Clawdmeter is already running; opening its window");
+            log::info!("Agentsmeter is already running; opening its window");
             let _ = ipc::send_command(&paths, &AppCommand::Open(Page::Overview.as_str().into()));
             return 0;
         }
@@ -442,7 +442,7 @@ pub fn run(paths: Paths) -> i32 {
 }
 
 fn run_locked(paths: Paths, _lock: Option<std::fs::File>) -> i32 {
-    log::info!("=== Clawdmeter {} ===", crate::version());
+    log::info!("=== Agentsmeter {} ===", crate::version());
     // An AppImage renews the binary copy its hooks run (see launch::hook_binary).
     if std::env::var_os("APPIMAGE").is_some() {
         let _ = crate::hooks::install::hook_binary(&paths.state_dir);

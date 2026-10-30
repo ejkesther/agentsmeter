@@ -14,16 +14,19 @@
   is the app's own and is left alone on uninstall. Uninstalling removes the
   app's Start at login entry (HKCU Run value `Clawdmeter`, written by
   clawdmeter-core's autostart.rs); upgrades keep it, since the path stays.
+  The names people see (Apps & features, the Start Menu) are Agentsmeter,
+  this fork's; folders, registry keys and the exe keep Clawdmeter's names so
+  installs, hooks and Start at login carry over.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="Clawdmeter"
-           Manufacturer="Clawdmeter"
+  <Package Name="Agentsmeter"
+           Manufacturer="Agentsmeter"
            Version="$(var.Version)"
            UpgradeCode="1012DDC1-60D9-461E-8D64-1939270200AD"
            Scope="perUser"
            Language="1033">
     <MajorUpgrade AllowSameVersionUpgrades="yes"
-                  DowngradeErrorMessage="A newer version of Clawdmeter is already installed." />
+                  DowngradeErrorMessage="A newer version of Agentsmeter is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="ClawdmeterIcon" SourceFile="$(var.Icon)" />
@@ -65,8 +68,8 @@
       </Component>
       <Component Id="StartMenu" Directory="ProgramMenuFolder">
         <Shortcut Id="StartMenuShortcut"
-                  Name="Clawdmeter"
-                  Description="Claude Code usage on your Clawdmeter"
+                  Name="Agentsmeter"
+                  Description="Claude Code, Codex and Cursor usage on your desk"
                   Target="[INSTALLFOLDER]clawdmeter.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ClawdmeterIcon" />

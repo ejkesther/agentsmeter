@@ -65,7 +65,7 @@ fn load_local(path: &std::path::Path) -> Result<Source, (String, bool)> {
         .and_then(|s| {
             Manifest::parse(&s).map_err(|e| {
                 log::warn!("{}: {e}", path.display());
-                "This file isn't a valid Clawdmeter release manifest.".to_string()
+                "This file isn't a valid Agentsmeter release manifest.".to_string()
             })
         })
         .map(|manifest| Source::Local { dir: path.parent().map(PathBuf::from).unwrap_or_default(), manifest })
@@ -396,7 +396,7 @@ impl FlasherView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose a Clawdmeter manifest.json".into()),
+            prompt: Some("Choose an Agentsmeter manifest.json".into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = rx.await {
@@ -752,7 +752,7 @@ impl FlasherView {
 
     fn identify_view(&mut self, t: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let chip_text = match (&self.info, &self.chip) {
-            (Some(i), _) => format!("Running Clawdmeter {}", i.ver),
+            (Some(i), _) => format!("Running firmware {}", i.ver),
             (None, Some(c)) => format!(
                 "{} · {}{}",
                 c.chip.to_uppercase().replace("ESP32", "ESP32-"),
@@ -784,7 +784,7 @@ impl FlasherView {
         if self.probing {
             return d.child(para(
                 t,
-                "Checking board details. A board without Clawdmeter firmware may restart into its bootloader.",
+                "Checking board details. A board without this firmware may restart into its bootloader.",
             ));
         }
         let latest = self.source.as_ref().and_then(|s| s.as_ref().ok()).map(Source::version).unwrap_or_default();
@@ -793,7 +793,7 @@ impl FlasherView {
             (Some(_), _) if up_to_date => {
                 format!("Firmware is up to date ({latest}). Continue, or reinstall if needed.")
             }
-            (Some(_), _) => "Board identified from its Clawdmeter firmware.".to_string(),
+            (Some(_), _) => "Board identified from its firmware.".to_string(),
             (None, 1) => "One board in this release matches the detected chip.".to_string(),
             (None, n) if n > 1 => format!("{n} boards match this chip. Select the model on your desk."),
             _ => String::new(),

@@ -1,5 +1,5 @@
 <#
-Sets up Clawdmeter on Windows in one go:
+Sets up Agentsmeter (a fork of Clawdmeter) on Windows in one go:
 
   1. the app, from this project's latest GitHub release (checked against
      its SHA256SUMS), or a local build with -AppExe;
@@ -92,7 +92,7 @@ function Get-AppVersion([string]$exe) {
 }
 
 function Install-App {
-    Step 'The Clawdmeter app'
+    Step 'The Agentsmeter app'
     if ($AppExe) {
         $script:App = (Resolve-Path $AppExe).Path
         Say "Using $script:App"
@@ -108,14 +108,14 @@ function Install-App {
     $script:App = Join-Path $InstallDir 'clawdmeter.exe'
     $have = Get-AppVersion $script:App
     if ($have -eq $version) {
-        Say "Clawdmeter $version is installed."
+        Say "Agentsmeter $version is installed."
         return
     }
     $msi = $release.assets | Where-Object { $_.name -like '*-windows-x86_64.msi' } | Select-Object -First 1
     $sums = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
     if (-not $msi -or -not $sums) { throw "Release $($release.tag_name) has no Windows installer or SHA256SUMS." }
     # ${} because PowerShell reads "$version?" as a variable named "version?".
-    $what = if ($have) { "Update Clawdmeter $have to ${version}?" } else { "Install Clawdmeter ${version}?" }
+    $what = if ($have) { "Update Agentsmeter $have to ${version}?" } else { "Install Agentsmeter ${version}?" }
     if (-not (Ask $what)) { throw 'Setup needs the app.' }
 
     $dir = Join-Path $env:TEMP 'clawdmeter-setup'
@@ -134,14 +134,14 @@ function Install-App {
     # The installer replaces clawdmeter.exe, so the running app has to stop.
     $running = Get-Process -Name 'clawdmeter' -ErrorAction SilentlyContinue
     if ($running) {
-        Say 'Closing the running Clawdmeter...'
+        Say 'Closing the running Agentsmeter...'
         $running | Stop-Process -Force
         Start-Sleep -Seconds 2
     }
     Say 'Installing (per user, no admin)...'
     $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', "`"$file`"", '/passive', '/norestart') -Wait -PassThru
     if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "The installer stopped with code $($p.ExitCode)." }
-    Say "Installed Clawdmeter $version in $InstallDir."
+    Say "Installed Agentsmeter $version in $InstallDir."
     $old = Join-Path $env:LOCALAPPDATA 'Programs\Agentsmeter'
     if (Test-Path (Join-Path $old 'clawdmeter.exe')) {
         Say "An older hand-copied app is in $old. The hooks move to the new one below; you can delete that folder."
@@ -159,7 +159,7 @@ function Test-ClaudeSignIn {
 function Setup-Claude {
     Step 'Claude Code'
     if (-not (Have 'claude')) {
-        Say 'Clawdmeter reads Claude usage with Claude Code''s own sign-in. The Claude desktop app keeps its'
+        Say 'Agentsmeter reads Claude usage with Claude Code''s own sign-in. The Claude desktop app keeps its'
         Say 'sign-in to itself, so Claude Code is needed on its own even if you use the desktop app.'
         if (-not (Ask 'Install Claude Code?')) { Say 'Skipped.'; return }
         Install-Package 'Anthropic.ClaudeCode' 'Claude Code'
@@ -216,7 +216,7 @@ function Install-Hooks {
 
 function Set-StartAtLogin {
     Step 'Start at login'
-    if (Ask 'Start Clawdmeter when you sign in to Windows?') {
+    if (Ask 'Start Agentsmeter when you sign in to Windows?') {
         Invoke-App --start-at-login on | ForEach-Object { Say $_ }
     } else {
         Say 'Skipped.'
@@ -245,7 +245,7 @@ function Start-App {
     Step 'Your board'
     if (-not (Get-Process -Name 'clawdmeter' -ErrorAction SilentlyContinue)) {
         Start-Process -FilePath $script:App
-        Say 'Clawdmeter is running (look for Clawd in the tray).'
+        Say 'Agentsmeter is running (look for Clawd in the tray).'
     }
     if (-not (Test-Path (Join-Path $StateDir 'ble-address'))) {
         Say 'First run: the app opens its setup to flash the board over USB and pair it over Bluetooth.'
@@ -255,7 +255,7 @@ function Start-App {
 }
 
 function Invoke-Setup {
-    Write-Host 'Clawdmeter setup for Windows' -ForegroundColor Cyan
+    Write-Host 'Agentsmeter setup for Windows' -ForegroundColor Cyan
     Install-App
     Setup-Claude
     Setup-Codex

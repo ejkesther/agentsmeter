@@ -1,10 +1,14 @@
-# Clawdmeter
+# Agentsmeter
 
-[![As featured on TechCrunch](https://img.shields.io/badge/As%20featured%20on-TechCrunch-0A9E01?style=for-the-badge&logo=techcrunch&logoColor=white)](https://techcrunch.com/2026/05/14/clawdmeter-turns-your-claude-code-usage-stats-into-a-tiny-desktop-dashboard/)
+Agentsmeter shows your Claude Code, Codex and Cursor usage limits on an ESP32 development board on your desk. Tap the top-left corner of the screen to switch agents: Clawd sits there for Claude Code, and Codex and Cursor have their own icons. Clawd lives on the device. He reacts to prompts, cheers you on, and alerts you when a session needs your attention.
 
-![Two Clawdmeter devices: Clawd's face on the left, session and weekly usage on the right](docs/images/clawdmeter-hero.jpg)
+> **Agentsmeter is a fork of [Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)** by
+> [Hermann Björgvin Haraldsson](https://github.com/HermannBjorgvin) ([@HermannBjorgvin](https://x.com/HermannBjorgvin)).
+> Almost all of it is his work and that of Clawdmeter's contributors; [Credits](#credits) lists what this fork adds.
 
-Clawdmeter shows your Claude Code usage limits on an ESP32 development board on your desk. Clawd lives on the device. He reacts to prompts, cheers you on, and alerts you when a session needs your attention.
+[![Clawdmeter as featured on TechCrunch](https://img.shields.io/badge/Clawdmeter%20featured%20on-TechCrunch-0A9E01?style=for-the-badge&logo=techcrunch&logoColor=white)](https://techcrunch.com/2026/05/14/clawdmeter-turns-your-claude-code-usage-stats-into-a-tiny-desktop-dashboard/)
+
+![Two Clawdmeter devices from the original project: Clawd's face on the left, session and weekly usage on the right](docs/images/clawdmeter-hero.jpg)
 
 ## Supported boards
 
@@ -32,12 +36,12 @@ Supported on every release.
 
 ### Experimental
 
-Ports contributed by the community. Expect rough edges: bugs, or a layout
-that isn't optimal for the panel. If something is off, fix it and open a PR.
-If everything works, tell us in the
+Ports contributed by the Clawdmeter community. Expect rough edges: bugs, or
+a layout that isn't optimal for the panel. Board support is maintained in the
+original project: if everything works, say so in its
 [Board support reports](https://github.com/HermannBjorgvin/Clawdmeter/discussions/222)
-discussion (env name, firmware version, a photo) and we'll move the board to
-Stable.
+discussion (env name, firmware version, a photo) so the board can move to
+Stable there.
 
 |                                                                                                        | Board                                                                                                           |                                                                                               |
 | :----------------------------------------------------------------------------------------------------: | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -71,7 +75,7 @@ From a clone, run `setup.cmd`. Or download the app from the [latest release](htt
 
 | OS             | Package     | Install                                                                                                                          |
 | -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| macOS          | `.dmg`      | Drag Clawdmeter to Applications. If blocked, use **System Settings → Privacy & Security → Open Anyway**. Allow Bluetooth access. |
+| macOS          | `.dmg`      | Drag the app (still named Clawdmeter on macOS) to Applications. If blocked, use **System Settings → Privacy & Security → Open Anyway**. Allow Bluetooth access. |
 | Windows        | `.msi`      | Run the installer. If SmartScreen blocks it, choose **More info → Run anyway**.                                                  |
 | Debian, Ubuntu | `.deb`      | `sudo apt install ./clawdmeter_<version>_amd64.deb`                                                                              |
 | Other Linux    | `.AppImage` | `chmod +x clawdmeter-*.AppImage`, then run it.                                                                                   |
@@ -83,19 +87,27 @@ portable archives, and Nix setup.
 
 ## Quick start
 
-1. Launch Clawdmeter and follow setup. Connect the board with a USB data
+On Windows, the setup command above does all of this for you.
+
+1. Launch Agentsmeter and follow setup. Connect the board with a USB data
    cable, check the selected board, and install firmware.
-2. Pair **Clawdmeter** in your computer's Bluetooth settings. It appears as
-   a keyboard because its buttons send key presses.
-3. Open **Hooks** to let Clawd react to Claude Code activity and alert when
-   a session needs an answer. Review the changes before saving.
-   Usage meters work without hooks.
+2. Pair the board in your computer's Bluetooth settings, where it's listed
+   as **Clawdmeter**. It appears as a keyboard because its buttons send key
+   presses.
+3. Open **Hooks** to let Clawd react to Claude Code, Codex and Cursor and
+   alert when a session needs an answer. Review the changes, then click
+   **Install hooks**. Usage meters work without hooks.
 4. Enable **Settings → Start at login** if you want the app to launch when
    you sign in.
+5. Tap the board's top-left corner to switch between Claude Code, Codex and
+   Cursor.
 
-![Clawdmeter desktop app showing device status and usage](desktop/docs/screenshots/overview.png)
+![The desktop app's Overview page: device status and usage](desktop/docs/screenshots/overview.png)
 
 ## Docs
+
+The docs come from the original project and use its name, Clawdmeter, for
+the app and the device.
 
 - [User guide](docs/user-guide.md): setup, device controls, settings, and connection help.
 - [Development](docs/development.md): builds, simulator, and releases.
@@ -104,6 +116,30 @@ portable archives, and Nix setup.
 - [Clawd's director](docs/clawd-director.md): behavior and character rules.
 - [Legacy daemon parity](docs/daemon-parity.md): upgrade steps and implementation differences.
 
+## Credits
+
+Agentsmeter is a fork of [Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter),
+created by [Hermann Björgvin Haraldsson](https://github.com/HermannBjorgvin)
+([@HermannBjorgvin](https://x.com/HermannBjorgvin)) and built with
+[Clawdmeter's contributors](https://github.com/HermannBjorgvin/Clawdmeter/graphs/contributors).
+The firmware, the board ports, Clawd and his director, the Bluetooth protocol
+and the desktop app are their work. If you like this, star and support
+[the original project](https://github.com/HermannBjorgvin/Clawdmeter).
+
+This fork adds:
+
+- Codex and Cursor usage next to Claude Code's, and hooks for both;
+- tapping the board's top-left corner to switch agents, with Codex and
+  Cursor icons in Clawd's seat;
+- the one-command Windows setup, quicker pickup of new sign-ins, and
+  releases from this repository.
+
+Clawd is Anthropic's mascot; his animations on the device come from
+Anthropic's official ones. The app's files and settings and the board's
+Bluetooth name keep the Clawdmeter name, so existing setups keep working.
+
 ## Licensing gray area warning
+
+From the original project, and it applies to this fork too:
 
 The software in this repository uses and adheres to the Anthropic brand guidelines and uses the same proprietary fonts that Anthropic has a license for but this software uses without permission as well as using assets from Anthropic such as the copyrighted Clawd mascot so even though the code in this repo is non-proprietary I will not license it myself under a copyleft license since this repo includes proprietary fonts and copyrighted assets. Please be aware of this if you fork or copy the code from this repo. **You have been warned!**

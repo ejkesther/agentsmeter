@@ -26,9 +26,9 @@ pub fn hook_targets(paths: &Paths, settings: &Settings) -> Vec<(PathBuf, Agent)>
 /// The executable Start at login runs, unless it lives somewhere that won't
 /// last (a zip or temp folder, a disk image).
 fn stable_exe() -> Result<PathBuf, String> {
-    let exe = launch::stable_launch_path().map_err(|_| "Couldn't locate the Clawdmeter executable.".to_owned())?;
+    let exe = launch::stable_launch_path().map_err(|_| "Couldn't locate the Agentsmeter executable.".to_owned())?;
     match launch::unstable(&exe) {
-        Some(u) => Err(format!("Clawdmeter is running from {}. {}", u.location_noun(), u.advice())),
+        Some(u) => Err(format!("Agentsmeter is running from {}. {}", u.location_noun(), u.advice())),
         None => Ok(exe),
     }
 }

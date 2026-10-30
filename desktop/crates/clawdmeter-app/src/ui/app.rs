@@ -223,18 +223,18 @@ impl AppView {
             .pt(px(12.))
             .text_size(px(12.))
             .text_color(t.mute)
-            .child(
-                div().flex().gap(px(4.)).whitespace_nowrap().child("Created by").child(
-                    div()
-                        .id("credit")
-                        .debug_selector(|| "credit".into())
-                        .text_color(t.dim)
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(t.text).underline())
-                        .on_click(|_, _, cx| cx.open_url(CREDIT_URL))
-                        .child("@HermannBjorgvin"),
-                ),
-            )
+            .child(div().flex().gap(px(4.)).whitespace_nowrap().child("A fork of").child(footer_link(
+                t,
+                "original",
+                "Clawdmeter",
+                ORIGINAL_URL,
+            )))
+            .child(div().flex().gap(px(4.)).whitespace_nowrap().child("by").child(footer_link(
+                t,
+                "credit",
+                "@HermannBjorgvin",
+                CREDIT_URL,
+            )))
             .child(format!("Version {}", crate::version()));
         div()
             .flex()
@@ -255,8 +255,22 @@ impl AppView {
     }
 }
 
-/// The author's profile, linked from the sidebar footer.
+/// The original project this app is a fork of, and its author's profile,
+/// linked from the sidebar footer.
+const ORIGINAL_URL: &str = "https://github.com/HermannBjorgvin/Clawdmeter";
 const CREDIT_URL: &str = "https://x.com/HermannBjorgvin";
+
+/// A muted link in the sidebar footer.
+fn footer_link(t: &Theme, id: &'static str, text: &'static str, url: &'static str) -> impl IntoElement {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .text_color(t.dim)
+        .cursor_pointer()
+        .hover(|s| s.text_color(t.text).underline())
+        .on_click(move |_, _, cx| cx.open_url(url))
+        .child(text)
+}
 
 /// The sidebar icon for a page.
 fn page_icon(page: Page) -> &'static str {

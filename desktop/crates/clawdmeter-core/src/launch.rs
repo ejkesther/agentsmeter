@@ -79,7 +79,7 @@ impl Unstable {
         }
     }
 
-    /// Where it runs from, for "Clawdmeter is running from <noun>."
+    /// Where it runs from, for "Agentsmeter is running from <noun>."
     pub fn location_noun(self) -> &'static str {
         match self {
             Unstable::DiskImage => "its disk image",
@@ -92,9 +92,9 @@ impl Unstable {
     pub fn advice(self) -> &'static str {
         match self {
             Unstable::DiskImage | Unstable::Translocated => {
-                "Move Clawdmeter to Applications first, then open it from there."
+                "Move Agentsmeter to Applications first, then open it from there."
             }
-            Unstable::Temporary => "Extract Clawdmeter from the zip first, then run it from there.",
+            Unstable::Temporary => "Extract Agentsmeter from the zip first, then run it from there.",
         }
     }
 }
