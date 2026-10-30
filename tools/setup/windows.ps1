@@ -114,7 +114,8 @@ function Install-App {
     $msi = $release.assets | Where-Object { $_.name -like '*-windows-x86_64.msi' } | Select-Object -First 1
     $sums = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
     if (-not $msi -or -not $sums) { throw "Release $($release.tag_name) has no Windows installer or SHA256SUMS." }
-    $what = if ($have) { "Update Clawdmeter $have to $version?" } else { "Install Clawdmeter $version?" }
+    # ${} because PowerShell reads "$version?" as a variable named "version?".
+    $what = if ($have) { "Update Clawdmeter $have to ${version}?" } else { "Install Clawdmeter ${version}?" }
     if (-not (Ask $what)) { throw 'Setup needs the app.' }
 
     $dir = Join-Path $env:TEMP 'clawdmeter-setup'
