@@ -830,9 +830,26 @@ impl SettingsView {
                 "Removing a folder stops monitoring it; its files and installed hooks stay in place."
             },
         ));
-        // Codex: one more account while its home exists, read from its own
-        // session logs.
-        if let Some(home) = &self.settings.codex_home {
+        // Codex and Cursor: one more account each while they're installed,
+        // read from Codex's session logs and Cursor's dashboard.
+        let others = [
+            (
+                &self.settings.codex_home,
+                "Codex",
+                "Codex's usage comes from its session logs on this computer, with no network call. Set codex_usage \
+                 = off in the config to stop reading it.",
+            ),
+            (
+                &self.settings.cursor_db,
+                "Cursor",
+                "Cursor's usage comes from its dashboard with the Cursor editor's sign-in: the Auto and API \
+                 allowances its Plan & Usage page shows. It isn't an official API, so it may stop working when \
+                 Cursor changes. Set cursor_usage = off in the config to stop reading it.",
+            ),
+        ];
+        let agents = others.iter().filter(|(a, _, _)| a.is_some()).count();
+        for (account, name, about) in others {
+            let Some(home) = account else { continue };
             let hs = home.display().to_string();
             let err = errors.iter().find(|e| e.dir == hs);
             let (meta, chip) = match (err, active.as_deref() == Some(hs.as_str())) {
@@ -861,13 +878,16 @@ impl SettingsView {
                 )
                 .when_some(chip, |r, c| r.child(c));
             pane = pane
-                .child(subheading(t, "Codex"))
+                .child(subheading(t, name))
                 .child(div().flex().flex_col().rounded(px(R_M)).border_1().border_color(t.line).child(row))
-                .child(caption(
-                    t,
-                    "Codex's usage comes from its session logs on this computer, with no network call. Set \
-                     codex_usage = off in the config to stop reading it.",
-                ));
+                .child(caption(t, about));
+        }
+        if agents > 0 {
+            pane = pane.child(caption(
+                t,
+                "The device shows one agent's usage at a time. Tap its top-left corner to switch; it keeps to your \
+                 pick until the next tap.",
+            ));
         }
         if self.snap.is_none() {
             pane = pane.child(notice(t, Tone::Plain, not_running_text()));

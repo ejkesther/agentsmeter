@@ -167,6 +167,7 @@ static const Design* const DESIGNS[] = { &LARGE, &COMPACT, &SMALL };
 #define TITLE_GAP   4   // title keeps this far from the logo and the battery
 #define PILL_GAP    4   // the percentage keeps this far from its pill
 #define ROUND_INSET 6   // content keeps this far inside a round panel's edge
+#define CORNER_TOUCH_SLOP 8   // the corner seat's touch target reaches this far past its art
 
 // ─── Pieces ──────────────────────────────────────────────────────────────────
 
@@ -209,8 +210,8 @@ static void place_cards(Layout& L, const Design& d, int16_t x, int16_t w, int16_
 static bool cards_fit(const Layout& L) {
     const int16_t inner = L.card[0].w - 2 * L.pad_x;
     const int16_t pill = PILL_GAP + 2 * L.pill_pad_x;
-    const char* const usage_pills[] = { L.pills[0], L.pills[1], L.pills[3] };
-    const int16_t usage = layout_text_width(L.pct_font, "100%") + pill + widest(L.pill_font, usage_pills, 3);
+    const char* const usage_pills[] = { L.pills[0], L.pills[1], L.pills[3], L.pills[4], L.pills[5] };
+    const int16_t usage = layout_text_width(L.pct_font, "100%") + pill + widest(L.pill_font, usage_pills, 5);
     const int16_t spend = layout_text_width(L.ent_pct_font, "100") + 4
                         + layout_text_width(L.reset_font, "%") + pill
                         + layout_text_width(L.pill_font, L.pills[2]);
@@ -471,4 +472,8 @@ Layout layout_compute(const LayoutShape& shape) {
     fit_pairing(L, *d);
     fit_period(L);
     return L;
+}
+
+bool layout_in_corner(const Layout& L, int x, int y) {
+    return x >= 0 && y >= 0 && x < L.logo_x + logo_w(L) + CORNER_TOUCH_SLOP && y < L.card[0].y;
 }

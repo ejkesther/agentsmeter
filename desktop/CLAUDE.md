@@ -73,7 +73,9 @@ is faked behind `FlashHardware`.
   default 3: the Device page's Animation silliness slider, sent as `lv`),
   `attention_anim` (`off`/`10s`/`30s`/`2m`, default `2m`, sent as `aa`
   seconds), `pace_marker` (default off, sent as `pm`), `codex_usage`
-  (default on: read Codex as an account while its home exists), `claude_path`,
+  (default on: read Codex as an account while its home exists),
+  `cursor_usage` (default on: read Cursor as an account while the editor's
+  state database exists), `claude_path`,
   `release_repo`, `update_check`, `onboarding_done`, `alert_on` (alert kinds
   the daemon lets through: the hook records `k` from `hook_event_name` /
   `notification_type` and `engine.on_attention` drops the rest; default all
@@ -112,8 +114,8 @@ is faked behind `FlashHardware`.
 
 ## Cursor
 
-- Hooks only (Clawd reacts; no usage, no alerts: Cursor has no
-  permission-request event). `~/.cursor/hooks.json` (`Paths::cursor_home`)
+- Hooks: Clawd reacts, no alerts (Cursor has no permission-request event).
+  `~/.cursor/hooks.json` (`Paths::cursor_home`)
   is flat, `{"version": 1, "hooks": {event: [{command, matcher?}]}}`, so
   `merge` has its own branch (`merge_flat`); status and removal read both
   layouts (`hook_entries`). `CURSOR_HOOKS`: beforeSubmitPrompt, postToolUse,
@@ -126,6 +128,30 @@ is faked behind `FlashHardware`.
   | <command>`), so the command is `& "<exe>" hook …` (`agent_hook_command`;
   `owner()` skips the `& `), and the input may carry a BOM or mangled
   non-ASCII text: the hook reads stdin lossily and strips a BOM.
+- Usage (`cursor.rs`): the editor's state database (`Paths::cursor_db`,
+  `<config dir>/Cursor/User/globalStorage/state.vscdb`; `Settings::cursor_db`
+  while it exists unless `cursor_usage = off`) is one more account, read with
+  `probe::Plan::CursorApi`: `cursorAuth/accessToken` and
+  `stripeMembershipAuthId` from `ItemTable` (rusqlite, read only; immutable
+  when the editor has quit), then `GET cursor.com/api/usage-summary` with the
+  `WorkosCursorSessionToken` cookie. `autoPercentUsed` / `apiPercentUsed`
+  become session/week, both resetting at `billingCycleEnd`. It's the
+  dashboard's own endpoint, not a documented API: an unknown shape is
+  `NoCursorUsage`, never a zero. Asked every 5 min, 20 s after a Cursor Stop,
+  never within a minute of the last ask.
+
+## Agent switch
+
+- `Engine::agents()` lists the agents set up (Claude while it has config
+  dirs, Codex, Cursor). With more than Claude, every payload names the shown
+  one (`pv`), `{"ok":false}` included.
+- A corner tap on the device sends `{"agent":"next"}` (`DeviceEvent::NextAgent`):
+  `Engine::next_agent` picks the next agent, `shown_account` keeps the device
+  on it whoever moves (Claude: `claude_active`), and the next write is a
+  `Switch` (`rp:1`), or `NoData` with `pv` while it has no numbers (then
+  again after each poll of it). The daemon saves the pick to
+  `<state>/shown-agent` and restores it at start-up (`restore_pick`: nothing
+  sent until a poll). No pick: whichever moved last, as before.
 
 ## Usage sources
 

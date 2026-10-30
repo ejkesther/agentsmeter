@@ -218,10 +218,11 @@ impl Render for OverviewView {
         let (tone, title, sub) = match &self.snap {
             None => (Tone::Plain, "Not running", not_running_text().to_string()),
             Some(s) => {
-                let sub = match (&s.account, s.age(now)) {
+                let account = s.agent.clone().or_else(|| s.account.as_deref().map(|a| tilde(a, &home)));
+                let sub = match (account, s.age(now)) {
                     _ if s.logged_out => "Open Claude Code in a terminal and sign in.".into(),
-                    (Some(a), Some(age)) => format!("{} · updated {}", tilde(a, &home), ago(age)),
-                    (Some(a), None) => tilde(a, &home),
+                    (Some(a), Some(age)) => format!("{a} · updated {}", ago(age)),
+                    (Some(a), None) => a,
                     (None, _) => "No usage data yet".into(),
                 };
                 (state_tone(s.tray_state()), state_title(s), sub)

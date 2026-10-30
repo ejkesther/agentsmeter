@@ -85,9 +85,21 @@ bool payload_parse(const char* json, UsageData* out, const char** err) {
     return true;
 }
 
+Agent payload_agent(const char* pv) {
+    if (!pv) return AGENT_NONE;
+    if (strcmp(pv, "cl") == 0) return AGENT_CLAUDE;
+    if (strcmp(pv, "cx") == 0) return AGENT_CODEX;
+    if (strcmp(pv, "cu") == 0) return AGENT_CURSOR;
+    return AGENT_NONE;
+}
+
 const char* payload_provider_title(const char* pv) {
-    if (pv && strcmp(pv, "cl") == 0) return TITLE_TEXT[1];
-    if (pv && strcmp(pv, "cx") == 0) return TITLE_TEXT[2];
+    switch (payload_agent(pv)) {
+    case AGENT_CLAUDE: return TITLE_TEXT[1];
+    case AGENT_CODEX:  return TITLE_TEXT[2];
+    case AGENT_CURSOR: return TITLE_TEXT[3];
+    case AGENT_NONE:   break;
+    }
     return TITLE_TEXT[0];
 }
 

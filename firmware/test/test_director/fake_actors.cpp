@@ -39,7 +39,7 @@ static MMode    m_mode = M_SEATED;
 static MAfter   m_after = A_SEAT;
 static uint32_t m_until = 0;
 static uint32_t m_seated_since = 0;
-static bool     m_autonomy = false, m_minimal = false, m_attn = false;
+static bool     m_autonomy = false, m_minimal = false, m_attn = false, m_hidden = false;
 static bool     m_stay_away = false, m_to_seat = true, m_act_auto = false;
 static uint32_t m_rng = 12345;
 
@@ -114,6 +114,7 @@ bool mascot_hurry_home(void) {
 void mascot_place_away(void) { m_stay_away = false; m_mode = M_AWAY; }
 void mascot_reset(void) { m_attn = false; m_stay_away = false; m_seat(); }
 void mascot_set_minimal(bool on) { m_minimal = on; mascot_reset(); }
+void mascot_set_hidden(bool on) { m_hidden = on; }
 
 void mascot_attention(bool on, bool to_seat) {
     if (on == m_attn) return;
@@ -229,6 +230,7 @@ void face_look_at_x(int, uint32_t hold_ms) { f_busy_until = now() + hold_ms + 30
 
 // ─── The situation ───────────────────────────────────────────────────────────
 bool ui_meters_live(void) { return world.meters_live; }
+bool ui_in_corner(int x, int y) { return x < 80 && y < 80; }
 void ui_set_alert_text(const char*) {}
 bool idle_is_asleep(void) { return world.asleep; }
 bool minimal_mode(void) { return false; }
@@ -243,8 +245,8 @@ void fake_actors_tick(void) {
 
 OnScreen fake_on_screen(void) {
     OnScreen s;
-    s.corner = (m_mode == M_SEATED || m_mode == M_ACT || m_mode == M_WALK || m_mode == M_HELD ||
-                m_mode == M_SEAT_ATTN);
+    s.corner = !m_hidden && (m_mode == M_SEATED || m_mode == M_ACT || m_mode == M_WALK || m_mode == M_HELD ||
+                             m_mode == M_SEAT_ATTN);
     s.big = (m_mode == M_LURK || m_mode == M_BIG_IN || m_mode == M_BIG_ACT || m_mode == M_BIG_OUT);
     s.performer = performer_visible();
     s.face = face_visible();

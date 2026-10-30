@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "idle.h"
 #include "minimal_mode.h"
+#include "payload.h"
 #include "hal/board_caps.h"
 #include "usage_rate.h"
 #include <Arduino.h>
@@ -68,6 +69,14 @@ static bool        joy_pending = false;
 static uint32_t    joy_at = 0;
 static bool        minimal = false;
 static ClawdRng    rng;
+
+// Agents (`pv`): the app names whose numbers are on the meters while another
+// agent than Claude is set up. Then a tap on the corner seat asks it for the
+// next agent's, and while Codex's or Cursor's are shown their icon has the
+// seat (ui.cpp): Clawd is out of sight and still, as in minimal mode.
+static bool        agents_named = false;
+static bool        other_agent = false;
+static bool        agent_switch_wanted = false;
 
 // A tap on the meters (the aquarium)
 static int         peek_x = 0;                // where the peek's tap landed
@@ -218,6 +227,12 @@ bool director_take_dismissed(void) {
     return d;
 }
 
+bool director_take_agent_switch(void) {
+    const bool s = agent_switch_wanted;
+    agent_switch_wanted = false;
+    return s;
+}
+
 // ─── Inputs ──────────────────────────────────────────────────────────────────
 // Peek speeds: the hop and the duck-out are the acknowledgement, not the
 // point, so they're quick and the face isn't kept waiting.
@@ -293,15 +308,46 @@ void director_set_liveliness(int level) {
     mascot_autonomy(beat == B_HOME && !minimal && t.idle_acts);
 }
 
+// A tap on the corner seat while the app names the agent: the next agent's
+// numbers, please. The alert's dismissing tap and the way back from the face
+// or a performance come first, and the pairing hint is its own control.
+static bool corner_tap(int x, int y) {
+    if (!agents_named || attention_on || pairing_touch) return false;
+    if (beat != B_HOME && beat != B_CORNER) return false;
+    if (!ui_in_corner(x, y)) return false;
+    engage();
+    agent_switch_wanted = true;
+    Serial.printf("[%lu] director: tap on the corner -> next agent\n", (unsigned long)now_ms());
+    return true;
+}
+
 static void indev_cb(lv_event_t* e) {
     (void)e;
     lv_point_t p = { 0, 0 };
     if (touch_indev) lv_indev_get_point(touch_indev, &p);
+    if (corner_tap(p.x, p.y)) return;
     director_tap(p.x);
 }
 
+static void apply_minimal(bool on);
+
+// Codex's or Cursor's numbers on the meters (or Claude's again): Clawd
+// leaves the seat to its icon, or takes it back.
+static void set_other_agent(bool on) {
+    if (on == other_agent) return;
+    other_agent = on;
+    mascot_set_hidden(on);
+    apply_minimal(on || minimal_mode());
+}
+
 void director_on_payload(const UsageData* d, const SignalsUpdate* sig) {
-    if (!d->valid || !d->ok) return;
+    if (!d->valid) return;
+    // Before the "no data" check: switching to an agent with no numbers yet
+    // still shows whose they would be.
+    const Agent agent = payload_agent(d->provider);
+    agents_named = agent != AGENT_NONE;
+    set_other_agent(agent == AGENT_CODEX || agent == AGENT_CURSOR);
+    if (!d->ok) return;
     window_not_started = !d->enterprise && d->session_reset_mins < 0;
 
     // The slow clock moving counts as you being around.

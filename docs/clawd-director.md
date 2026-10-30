@@ -338,6 +338,24 @@ a board capability, with no NVS override, desktop setting, or serial toggle.
 - The status line shows a fixed glyph and one word ("Connected", "No data",
   "Waiting") and redraws only when the state changes.
 
+## Other agents' numbers
+
+While the app names the agent (`pv`, sent while Codex or Cursor is set up),
+a tap on the corner seat (`layout_in_corner`: the seat, out to the left edge
+and down to the first card) asks the app for the next agent's numbers
+(`director_take_agent_switch` → `{"agent":"next"}`) instead of starting the
+peek. A tap still dismisses an alert first, and the corner tap waits while
+the face or a performance is up (that tap means "show me the meters").
+
+With Codex's (`cx`) or Cursor's (`cu`) numbers on the meters, their icon
+(`agent_icons.h`) has the seat and Clawd is out of sight: the director runs
+minimal mode (`set_other_agent`) and the mascot is hidden
+(`mascot_set_hidden`), so nothing he does starts and the one-Clawd rule
+holds with no Clawd at all. The status line keeps its verbs (minus
+"Clauding") and an alert still shows its message and chimes. Claude's
+numbers again: he's back in his seat. `test_director` covers the switch and
+fuzzes the one-Clawd rule with agents changing.
+
 ## Boards without PSRAM (C6)
 
 - Corner Clawd: animated. Its buffer, sized for the largest corner act

@@ -130,15 +130,23 @@ static void test_provider(void) {
     TEST_ASSERT_EQUAL_STRING("Codex", payload_provider_title(d.provider));
     TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"cl\"}", &d, nullptr));
     TEST_ASSERT_EQUAL_STRING("Claude", payload_provider_title(d.provider));
+    TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"cu\"}", &d, nullptr));
+    TEST_ASSERT_EQUAL_STRING("Cursor", payload_provider_title(d.provider));
+    TEST_ASSERT_EQUAL(AGENT_CURSOR, payload_agent(d.provider));
     // An agent this firmware doesn't know: the plain title, kept to 3 chars.
-    TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"cursor\"}", &d, nullptr));
-    TEST_ASSERT_EQUAL_STRING("cur", d.provider);
+    TEST_ASSERT_TRUE(payload_parse("{\"pv\":\"gemini\"}", &d, nullptr));
+    TEST_ASSERT_EQUAL_STRING("gem", d.provider);
     TEST_ASSERT_EQUAL_STRING("Usage", payload_provider_title(d.provider));
+    TEST_ASSERT_EQUAL(AGENT_NONE, payload_agent(d.provider));
+    TEST_ASSERT_EQUAL(AGENT_NONE, payload_agent(""));
+    TEST_ASSERT_EQUAL(AGENT_CLAUDE, payload_agent("cl"));
+    TEST_ASSERT_EQUAL(AGENT_CODEX, payload_agent("cx"));
     // Absent is Claude: an app without Codex set up sends no `pv`.
     TEST_ASSERT_TRUE(payload_same_provider("", "cl"));
     TEST_ASSERT_TRUE(payload_same_provider("cx", "cx"));
     TEST_ASSERT_FALSE(payload_same_provider("", "cx"));
     TEST_ASSERT_FALSE(payload_same_provider("cl", "cx"));
+    TEST_ASSERT_FALSE(payload_same_provider("cx", "cu"));
 }
 
 static void test_long_strings_truncate(void) {

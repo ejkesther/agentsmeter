@@ -102,6 +102,10 @@ static void fresh_director(void) {
     resume_screensaver = false;
     react_anim = NULL;
     joy_pending = false;
+    agents_named = false;
+    other_agent = false;
+    agent_switch_wanted = false;
+    mascot_set_hidden(false);
     ClawdTuning fast;
     clawd_tuning_fast(&fast);
     clawd_tuning_set_base(&fast);
@@ -116,6 +120,8 @@ static void fresh_director(void) {
 }
 
 static int fuzz_level = CLAWD_LIVELINESS_DEFAULT;
+static bool fuzz_agents = false;   // the app names the agent, and it changes
+static const char* const AGENTS[] = { "cl", "cx", "cu" };
 
 static void fuzz(uint32_t seed, uint32_t total_ms, bool has_big) {
     fz = seed;
@@ -124,6 +130,7 @@ static void fuzz(uint32_t seed, uint32_t total_ms, bool has_big) {
     director_set_liveliness(fuzz_level);
     float pct = 10;
     uint32_t es = 0;
+    char agent[4] = "cl";
     for (uint32_t t = 0; t < total_ms && !broke;) {
         const uint32_t gap = fz_range(50, 6000);
         run_for(gap);
@@ -147,9 +154,15 @@ static void fuzz(uint32_t seed, uint32_t total_ms, bool has_big) {
             continue;
         }
         case 14:         director_set_liveliness((int)fz_range(1, 5)); continue;
+        case 15:
+            if (!fuzz_agents) break;              // a quiet stretch
+            if (fz_next() % 2) { (void)corner_tap(10, 10); continue; }
+            strcpy(agent, AGENTS[fz_next() % 3]);
+            break;
         default:         break;                   // a quiet stretch
         }
         d.session_pct = pct;
+        if (fuzz_agents) strcpy(d.provider, agent);
         send(d, sig);
     }
     assert_one_clawd();
@@ -219,6 +232,71 @@ static void test_no_nonsense_ends_a_running_show(void) {
     TEST_ASSERT_EQUAL_STRING("home", director_beat_name());
     TEST_ASSERT_TRUE(fake_corner_seated_still());
     director_set_liveliness(CLAWD_LIVELINESS_DEFAULT);
+}
+
+// Codex's or Cursor's numbers: their icon has the seat, so no Clawd at all
+// and nothing he'd do starts. A tap on the corner asks for the next agent
+// (an alert's dismissing tap comes first); Claude's numbers again and he's
+// back in his seat. Without `pv` (only Claude set up) the corner is just
+// part of the meters.
+static void test_other_agent_has_the_seat(void) {
+    world.has_big = true;
+    fresh_director();
+    UsageData d = live_payload();
+    strcpy(d.provider, "cx");
+    send(d, no_signal());
+    world.activity = 3;
+    run_for(60 * 1000);                          // busy, then quiet: no show, no screensaver
+    world.activity = 0;
+    run_for(60 * 1000);
+    TEST_ASSERT_EQUAL_STRING("home", director_beat_name());
+    TEST_ASSERT_EQUAL(0, fake_clawds(fake_on_screen()));
+    director_tap(300);                           // the meters: no peek
+    run_for(3000);
+    TEST_ASSERT_EQUAL_STRING("home", director_beat_name());
+    TEST_ASSERT_FALSE(corner_tap(200, 10));      // not the corner
+    TEST_ASSERT_TRUE(corner_tap(10, 10));
+    TEST_ASSERT_TRUE(director_take_agent_switch());
+    TEST_ASSERT_FALSE(director_take_agent_switch());
+
+    director_alert("needs you");
+    run_for(1000);
+    TEST_ASSERT_EQUAL(0, fake_clawds(fake_on_screen()));
+    TEST_ASSERT_FALSE(corner_tap(10, 10));       // the tap dismisses first
+    director_tap(10);
+    TEST_ASSERT_TRUE(director_take_dismissed());
+    TEST_ASSERT_FALSE(director_take_agent_switch());
+
+    d.ok = false;                                // Cursor, no numbers yet: still its seat
+    strcpy(d.provider, "cu");
+    send(d, no_signal());
+    run_for(1000);
+    TEST_ASSERT_EQUAL(0, fake_clawds(fake_on_screen()));
+    d.ok = true;
+    strcpy(d.provider, "cl");
+    send(d, no_signal());
+    run_for(1000);
+    TEST_ASSERT_EQUAL(1, fake_clawds(fake_on_screen()));
+    TEST_ASSERT_TRUE(corner_tap(10, 10));        // Claude's numbers switch too
+    TEST_ASSERT_TRUE(director_take_agent_switch());
+    d.provider[0] = '\0';
+    send(d, no_signal());
+    TEST_ASSERT_FALSE(corner_tap(10, 10));
+    director_tap(10);                            // a tap on the meters again: the peek
+    run_for(3000);
+    TEST_ASSERT_EQUAL_STRING("peek", director_beat_name());
+    assert_one_clawd();
+}
+
+static void test_fuzz_one_clawd_switching_agents(void) {
+    fuzz_agents = true;
+    memset(seen, 0, sizeof(seen));
+    for (uint32_t seed = 1; seed <= 12 && !broke; seed++) {
+        fuzz(seed * 6151u, 20 * 60 * 1000, true);
+        fuzz(seed * 3079u, 20 * 60 * 1000, false);
+    }
+    fuzz_agents = false;
+    assert_one_clawd();
 }
 
 static void test_fuzz_one_clawd_at_every_liveliness(void) {
@@ -342,6 +420,8 @@ int main(int, char**) {
     RUN_TEST(test_no_nonsense_sits_still_through_everything_but_taps);
     RUN_TEST(test_no_nonsense_ends_a_running_show);
     RUN_TEST(test_fuzz_one_clawd_at_every_liveliness);
+    RUN_TEST(test_other_agent_has_the_seat);
+    RUN_TEST(test_fuzz_one_clawd_switching_agents);
     RUN_TEST(test_boot_dismisses_alert_without_touch);
     RUN_TEST(test_boot_leaves_alert_alone_with_touch);
     RUN_TEST(test_attention_animation_off_with_full_size_sprite);

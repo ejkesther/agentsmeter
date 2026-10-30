@@ -25,6 +25,10 @@ pub struct Paths {
     /// Cursor's user folder (`~/.cursor`): its `hooks.json` takes the
     /// Cursor hooks.
     pub cursor_home: PathBuf,
+    /// The Cursor editor's state database, which holds its sign-in
+    /// (`<config dir>/Cursor/User/globalStorage/state.vscdb`; read for its
+    /// usage, [`crate::cursor`]).
+    pub cursor_db: PathBuf,
 }
 
 impl Paths {
@@ -46,7 +50,10 @@ impl Paths {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".codex"));
         let cursor_home = home.join(".cursor");
-        Paths { home, state_dir, config_file, cache_dir, codex_home, cursor_home }
+        // %APPDATA% on Windows, ~/Library/Application Support on macOS,
+        // ~/.config on Linux: where the editor keeps its user data.
+        let cursor_db = cursor_state_db(&dirs::config_dir().unwrap_or_else(|| home.join(".config")));
+        Paths { home, state_dir, config_file, cache_dir, codex_home, cursor_home, cursor_db }
     }
 
     /// Everything under one root (tests, portable installs).
@@ -59,6 +66,7 @@ impl Paths {
             cache_dir: root.join("cache"),
             codex_home: root.join(".codex"),
             cursor_home: root.join(".cursor"),
+            cursor_db: cursor_state_db(root),
         }
     }
 
@@ -84,6 +92,12 @@ impl Paths {
         self.state_dir.join("usage-blocks.json")
     }
 
+    /// The agent picked on the device (its [`crate::events::Agent::id`], one
+    /// line), kept across restarts. Absent: whichever moved last.
+    pub fn shown_agent_file(&self) -> PathBuf {
+        self.state_dir.join("shown-agent")
+    }
+
     /// Downloaded firmware images.
     pub fn firmware_cache(&self) -> PathBuf {
         self.cache_dir.join("firmware")
@@ -93,6 +107,10 @@ impl Paths {
     pub fn expand_tilde(&self, raw: &str) -> PathBuf {
         expand_tilde(&self.home, raw)
     }
+}
+
+fn cursor_state_db(config_dir: &Path) -> PathBuf {
+    config_dir.join("Cursor").join("User").join("globalStorage").join("state.vscdb")
 }
 
 /// Expand a leading `~` (alone, `~/x` or `~\x`) and `$HOME` against `home`.
@@ -130,6 +148,8 @@ mod tests {
         assert_eq!(p.ble_address_file(), PathBuf::from("/t/state/ble-address"));
         // Never the developer's real Codex home, whatever CODEX_HOME says.
         assert_eq!(p.codex_home, PathBuf::from("/t/.codex"));
+        assert_eq!(p.cursor_db, Path::new("/t/Cursor/User/globalStorage/state.vscdb"));
+        assert_eq!(p.shown_agent_file(), PathBuf::from("/t/state/shown-agent"));
     }
 
     #[cfg(not(windows))]

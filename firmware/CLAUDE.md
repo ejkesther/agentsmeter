@@ -41,8 +41,9 @@ pins and hardware gotchas, which loads when you work in that folder.
 - **Sound**: `ding.cpp` synthesizes the one sound (a C#5 ding, mirrored by
   the desktop's `chime.rs`); `chime.cpp` streams it through the ES8311.
 - **Generated, never hand-edited**: `splash_animations.h` (only
-  `clawd_anim.cpp` includes it), `font_*.c`. Regenerate with the
-  `regenerating-firmware-assets` skill.
+  `clawd_anim.cpp` includes it), `font_*.c`, `agent_icons.h` (Codex's and
+  Cursor's corner icons: `node tools/agent_icons.js`, the art is in there).
+  Regenerate with the `regenerating-firmware-assets` skill.
 - **Tests**: `firmware/test/test_*`, native, run with
   `pio test -d firmware -e native`. Keep pure logic (parsing, signals,
   policy, geometry, synthesis) out of LVGL/Arduino code so it stays testable

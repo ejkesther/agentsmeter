@@ -11,6 +11,7 @@
 #include <Arduino.h>
 #include "logo.h"
 #include "clawd_still.h"
+#include "agent_icons.h"
 #include "icons.h"
 #include "hal/board_caps.h"
 #include "layout.h"
@@ -26,6 +27,11 @@ static Layout L = {};
 static_assert(LAYOUT_LOGO_SLOT == LOGO_HEIGHT && LAYOUT_LOGO_SLOT_SMALL == LOGO_SMALL_HEIGHT, "logo slot");
 static_assert(LAYOUT_LOGO_W == CLAWD_STILL_W && LAYOUT_LOGO_W_SMALL == CLAWD_STILL_SMALL_W, "corner Clawd");
 static_assert(LAYOUT_BATT_W == ICON_BATTERY_W && LAYOUT_BATT_W_SMALL == ICON_BATTERY_SMALL_W, "battery icon");
+static_assert(AGENT_CODEX_W == CLAWD_STILL_W && AGENT_CODEX_H == CLAWD_STILL_H &&
+              AGENT_CURSOR_W == CLAWD_STILL_W && AGENT_CURSOR_H == CLAWD_STILL_H &&
+              AGENT_CODEX_SMALL_W == CLAWD_STILL_SMALL_W && AGENT_CODEX_SMALL_H == CLAWD_STILL_SMALL_H &&
+              AGENT_CURSOR_SMALL_W == CLAWD_STILL_SMALL_W && AGENT_CURSOR_SMALL_H == CLAWD_STILL_SMALL_H,
+              "agent icons fill Clawd's seat");
 
 // Anthropic brand palette — design tokens live in theme.h
 #include "theme.h"
@@ -88,6 +94,15 @@ static bool      data_ok = true;        // last payload's ok flag; a {"ok":false
 static int       view_state = -1;       // -1 unknown / 0 pair / 1 stale / 2 live
 static const uint32_t DATA_FRESH_MS = 90000;  // usage counts as "live" within this window (daemon sends ~60s)
 
+// ---- Agents (`pv`) ----
+// Codex's or Cursor's numbers on the meters: their icon has the corner seat
+// (Clawd is out of sight, clawd_director.cpp) and Cursor's cards are its two
+// monthly allowances. Claude's, or an app that doesn't say: Clawd's seat.
+static lv_obj_t*      agent_img = nullptr;
+static lv_image_dsc_t agent_dscs[2];      // [0] Codex, [1] Cursor
+static Agent          shown_agent = AGENT_NONE;
+static bool           agent_seen = false; // a payload has named (or not named) the agent
+
 // ---- Shared ----
 static lv_image_dsc_t logo_dsc;
 static bool     s_ble_connected = false;   // cached BLE connection state
@@ -149,9 +164,12 @@ static const char* const anim_messages[] = {
 #define ANIM_MSG_COUNT (sizeof(anim_messages) / sizeof(anim_messages[0]))
 
 // The first verb from `i` on that fits the status line as "<glyph> <verb>…";
-// a narrow panel skips the long ones rather than clipping them.
+// a narrow panel skips the long ones rather than clipping them, and Codex's
+// or Cursor's meters skip Claude's own verb.
 static uint8_t fitting_verb(uint8_t i) {
+    const bool other = shown_agent == AGENT_CODEX || shown_agent == AGENT_CURSOR;
     for (uint8_t n = 0; n < ANIM_MSG_COUNT; n++, i = (i + 1) % ANIM_MSG_COUNT) {
+        if (other && strcmp(anim_messages[i], "Clauding") == 0) continue;
         char buf[48];
         snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6", spinner_frames[1], anim_messages[i]);
         if (layout_text_width(L.status_font, buf) <= L.status_w) return i;
@@ -387,6 +405,8 @@ static void build_pair_group(lv_obj_t* parent) {
 
 bool ui_pair_hint_visible(void) { return view_state == 0; }
 
+bool ui_in_corner(int x, int y) { return layout_in_corner(L, x, y); }
+
 void ui_set_pair_hint(PairHint hint) {
     if (hint == pair_hint) return;
     pair_hint = hint;
@@ -516,10 +536,11 @@ void ui_init(void) {
 
     // Corner mascot in the old logo slot. The still Clawd is shorter than the
     // 80/40 px slot the spark logo used; center it vertically in that slot.
+    const int slot     = L.small_icons ? LOGO_SMALL_HEIGHT : LOGO_HEIGHT;
+    const int seat_top = L.logo_y + (slot - (L.small_icons ? CLAWD_STILL_SMALL_H : CLAWD_STILL_H)) / 2;
     {
-        const int slot  = L.small_icons ? LOGO_SMALL_HEIGHT : LOGO_HEIGHT;
         const int art_h = L.small_icons ? CLAWD_STILL_SMALL_H : CLAWD_STILL_H;
-        const int top   = L.logo_y + (slot - art_h) / 2;
+        const int top   = seat_top;
         const int cell  = L.small_icons ? 2 : 3;
         // His tallest act (jumping happy, the fresh-window joy) rises well
         // above the idle pose. Lower the seat just enough for it to clear the
@@ -538,6 +559,20 @@ void ui_init(void) {
             lv_obj_set_pos(logo_img, L.logo_x, top);
         }
     }
+
+    // Codex's and Cursor's icons, drawn on Clawd's grid at his size, take
+    // the same spot while their numbers are shown (apply_agent).
+    if (L.small_icons) {
+        init_icon_dsc_rgb565a8(&agent_dscs[0], AGENT_CODEX_SMALL_W, AGENT_CODEX_SMALL_H, agent_codex_small_data);
+        init_icon_dsc_rgb565a8(&agent_dscs[1], AGENT_CURSOR_SMALL_W, AGENT_CURSOR_SMALL_H, agent_cursor_small_data);
+    } else {
+        init_icon_dsc_rgb565a8(&agent_dscs[0], AGENT_CODEX_W, AGENT_CODEX_H, agent_codex_data);
+        init_icon_dsc_rgb565a8(&agent_dscs[1], AGENT_CURSOR_W, AGENT_CURSOR_H, agent_cursor_data);
+    }
+    agent_img = lv_image_create(scr);
+    lv_image_set_src(agent_img, &agent_dscs[0]);
+    lv_obj_set_pos(agent_img, L.logo_x, seat_top);
+    lv_obj_add_flag(agent_img, LV_OBJ_FLAG_HIDDEN);
 
     // Clawd performs in front of the meters, fully drawn, like the
     // attention walk-on (a tap sends him off). Created last so he's on top
@@ -559,6 +594,15 @@ static void apply_bar_colors(const UsageData* data) {
         place_pace_tick(tick_weekly, -1.0f);
         return;
     }
+    if (shown_agent == AGENT_CURSOR) {
+        // Cursor's allowances run a billing month, not 5 hours / 7 days:
+        // coloured by how full they are, no markers.
+        lv_obj_set_style_bg_color(bar_session, pct_color(data->session_pct), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(bar_weekly, pct_color(data->weekly_pct), LV_PART_INDICATOR);
+        place_pace_tick(tick_session, -1.0f);
+        place_pace_tick(tick_weekly, -1.0f);
+        return;
+    }
     lv_obj_set_style_bg_color(bar_session,
         bar_color(data->session_pct, data->session_reset_mins, PACE_SESSION_MINS), LV_PART_INDICATOR);
     place_pace_tick(tick_session, pace_elapsed_pct(data->session_reset_mins, PACE_SESSION_MINS));
@@ -573,9 +617,64 @@ void ui_set_pace_marker(bool on) {
     if (have_last_data) apply_bar_colors(&last_data);
 }
 
+static const char* session_pill(void) { return L.pills[shown_agent == AGENT_CURSOR ? 4 : 0]; }
+static const char* weekly_pill(void)  { return L.pills[shown_agent == AGENT_CURSOR ? 5 : 1]; }
+
+// An agent with no numbers yet: its cards stay empty (dimmed, like stale
+// data) rather than keep another agent's numbers under its name.
+static void blank_meters(void) {
+    lv_obj_set_style_text_font(lbl_session_pct, L.pct_font, 0);
+    lv_obj_add_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lbl_spending_desc, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lbl_spending_status, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lbl_session_reset, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lbl_session_label, session_pill());
+    lv_label_set_text(lbl_weekly_label, weekly_pill());
+    lv_label_set_text(lbl_session_pct, "--");
+    lv_label_set_text(lbl_weekly_pct, "--");
+    lv_bar_set_value(bar_session, 0, LV_ANIM_OFF);
+    lv_bar_set_value(bar_weekly, 0, LV_ANIM_OFF);
+    lv_obj_set_style_text_font(lbl_weekly_reset, L.reset_font, 0);
+    lv_label_set_text(lbl_session_reset, "No data");
+    lv_label_set_text(lbl_weekly_reset, "No data");
+    place_pace_tick(tick_session, -1.0f);
+    place_pace_tick(tick_weekly, -1.0f);
+    data_received = false;          // the status line says "No data", not "Stale"
+    have_last_data = false;
+}
+
+// Whose numbers these are (`pv`): the corner seat's icon, the title without
+// a clock, Cursor's pills. Runs before the "no data" check, so a switch to an
+// agent with no numbers still shows whose they would be.
+static void apply_agent(const UsageData* data) {
+    const Agent agent = payload_agent(data->provider);
+    if (agent_seen && agent == shown_agent) return;
+    const bool switched = agent_seen;
+    agent_seen = true;
+    shown_agent = agent;
+    const bool other = agent == AGENT_CODEX || agent == AGENT_CURSOR;
+    if (other) {
+        lv_image_set_src(agent_img, &agent_dscs[agent == AGENT_CURSOR ? 1 : 0]);
+        lv_obj_clear_flag(agent_img, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(agent_img, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (logo_img) {                 // the still Clawd (no buffer for the animated one)
+        if (other) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+    }
+    anim_verb_idx = fitting_verb(anim_verb_idx);
+    if (clock_base_epoch == 0) {
+        lv_label_set_text(lbl_title, payload_provider_title(data->provider));
+        apply_title_font();
+    }
+    if (switched && !data->ok) blank_meters();
+}
+
 void ui_update(const UsageData* data) {
     if (!data->valid) return;
     data_ok = data->ok;
+    apply_agent(data);
     if (!data->ok) return;          // a {"ok":false} "no data" beat → fall through to idle, keep last numbers
     last_data = *data;
     have_last_data = true;
@@ -613,7 +712,7 @@ void ui_update(const UsageData* data) {
         if (panel_weekly) lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_style_text_font(lbl_session_pct, L.pct_font, 0);
-        lv_label_set_text(lbl_session_label, L.pills[0]);
+        lv_label_set_text(lbl_session_label, session_pill());
         lv_obj_clear_flag(lbl_session_reset, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_spending_desc,   LV_OBJ_FLAG_HIDDEN);
@@ -663,7 +762,7 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_weekly_reset, buf);
     } else {
         int w_pct = (int)(data->weekly_pct + 0.5f);
-        lv_label_set_text(lbl_weekly_label, L.pills[1]);
+        lv_label_set_text(lbl_weekly_label, weekly_pill());
         lv_label_set_text_fmt(lbl_weekly_pct, "%d%%", w_pct);
         lv_bar_set_value(bar_weekly, w_pct, LV_ANIM_ON);
         format_reset_time(data->weekly_reset_mins, buf, sizeof(buf), "---");

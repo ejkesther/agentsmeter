@@ -14,13 +14,15 @@ static const char* const PAIR_TEXT_HOLDING    = "keep holding...";
 // The title when there's no clock: whose usage the meters show (`pv`), or
 // "Usage" when the app doesn't say (payload_provider_title). Sized like the
 // 24-hour clock.
-#define TITLE_TEXT_COUNT 3
-static const char* const TITLE_TEXT[TITLE_TEXT_COUNT] = { "Usage", "Claude", "Codex" };
+#define TITLE_TEXT_COUNT 4
+static const char* const TITLE_TEXT[TITLE_TEXT_COUNT] = { "Usage", "Claude", "Codex", "Cursor" };
 
 // Card pills: session, weekly, then the spend-capped account's spending and
-// period. The short set is for panels too narrow for the long one.
-static const char* const PILL_TEXT[4]       = { "Session", "Weekly", "Spending", "Period" };
-static const char* const PILL_TEXT_SHORT[4] = { "5h", "7d", "Spend", "Period" };
+// period, then Cursor's two allowances (Auto and API, both monthly). The
+// short set is for panels too narrow for the long one.
+#define PILL_COUNT 6
+static const char* const PILL_TEXT[PILL_COUNT]       = { "Session", "Weekly", "Spending", "Period", "Auto", "API" };
+static const char* const PILL_TEXT_SHORT[PILL_COUNT] = { "5h", "7d", "Spend", "Period", "Auto", "API" };
 
 // Widest text a card's reset line shows: the weekly window's last day, the
 // spend-capped account's caption, and its period line (its widest pace word and date).

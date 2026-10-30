@@ -498,6 +498,14 @@ void ble_send_dismiss(void) {
     }
 }
 
+void ble_send_agent_next(void) {
+    if (state == BLE_STATE_CONNECTED && tx_char) {
+        tx_char->setValue("{\"agent\":\"next\"}");
+        tx_char->notify();
+        Serial.println("BLE: next agent asked for on the device");
+    }
+}
+
 void ble_set_battery_level(int pct) {
     if (!hid_dev || pct < 0) return;
     if (pct > 100) pct = 100;

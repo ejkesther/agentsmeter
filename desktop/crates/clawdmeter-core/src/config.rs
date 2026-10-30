@@ -269,6 +269,10 @@ pub struct Settings {
     /// Codex's home, read as one more account ([`crate::codex`]): set while
     /// that folder exists, unless `codex_usage = off`. Derived, never written.
     pub codex_home: Option<PathBuf>,
+    /// The Cursor editor's state database, read as one more account
+    /// ([`crate::cursor`]): set while it exists, unless `cursor_usage = off`.
+    /// Derived, never written.
+    pub cursor_db: Option<PathBuf>,
 }
 
 /// `alert_on`: the alert kinds that show, as a comma list of `permission`,
@@ -398,6 +402,7 @@ impl Settings {
             attention_anim: cfg.get("attention_anim").map(AttentionAnim::parse).unwrap_or_default(),
             pace_marker: on_off(cfg.get("pace_marker"), false),
             codex_home: on_off(cfg.get("codex_usage"), true).then(|| paths.codex_home.clone()).filter(|h| h.is_dir()),
+            cursor_db: on_off(cfg.get("cursor_usage"), true).then(|| paths.cursor_db.clone()).filter(|d| d.is_file()),
         }
     }
 
@@ -628,6 +633,20 @@ mod tests {
         std::fs::create_dir_all(&paths.codex_home).unwrap();
         assert_eq!(codex(""), Some(paths.codex_home.clone()));
         assert_eq!(codex("codex_usage = off\n"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cursor_db_while_cursor_is_there() {
+        let root = std::env::temp_dir().join(format!("cm-cfg-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::under(&root);
+        let cursor = |text: &str| Settings::from_config(&ConfigFile::parse(text), &paths, None).cursor_db;
+        assert_eq!(cursor(""), None, "Cursor isn't installed");
+        std::fs::create_dir_all(paths.cursor_db.parent().unwrap()).unwrap();
+        std::fs::write(&paths.cursor_db, b"").unwrap();
+        assert_eq!(cursor(""), Some(paths.cursor_db.clone()));
+        assert_eq!(cursor("cursor_usage = off\n"), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

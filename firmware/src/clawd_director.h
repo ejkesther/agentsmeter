@@ -33,6 +33,9 @@ void director_on_payload(const UsageData* d, const SignalsUpdate* sig);
 void director_alert(const char* message);   // attention hook fired
 void director_alert_clear(void);            // the session moved on
 bool director_take_dismissed(void);         // an alert ended on the device since the last call
+// A tap on the corner seat asked for the next agent's numbers since the last
+// call (only while the app names the agent, `pv`). The caller tells the app.
+bool director_take_agent_switch(void);
 
 // Any touch press at screen x (wired internally to LVGL). On the meters it's
 // tapping the aquarium: the face comes up, curious, for a while (a tap on it

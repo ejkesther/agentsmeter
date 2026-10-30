@@ -101,16 +101,34 @@ trust them: type `/hooks` in Codex once after installing or updating them.
 If Cursor is installed (`~/.cursor`), the page lists its `hooks.json` too.
 Cursor's hooks make Clawd react to Cursor's agent: prompts, tool use and
 finished turns. Cursor has no event for a permission prompt, so it doesn't
-alert, and its usage isn't shown yet. Cursor picks up the hooks as soon as
-they're saved. On Windows, a Cursor started from Git Bash runs no hooks at
-all (a known Cursor issue); start it from the Start menu instead.
+alert. Cursor picks up the hooks as soon as they're saved. On Windows, a
+Cursor started from Git Bash runs no hooks at all (a known Cursor issue);
+start it from the Start menu instead.
 
 Codex's usage needs no hooks: Clawdmeter reads the 5-hour and weekly limits
 Codex saves in its session logs, about once a minute and right after a Codex
-turn ends. That sends nothing over the network. The **Accounts** page lists
-Codex, and the device shows whichever of Claude and Codex moved last; with
-the clock off, its title reads **Codex** or **Claude** to say which. Codex
-saves limits only when it signs in with ChatGPT, not with an API key.
+turn ends. That sends nothing over the network. Codex saves limits only when
+it signs in with ChatGPT, not with an API key.
+
+Cursor's usage needs no hooks either: with the Cursor editor's sign-in,
+Clawdmeter asks Cursor for the same summary its Plan & Usage page shows,
+about every 5 minutes and shortly after a Cursor turn ends. The device's
+cards then read **Auto** and **API**: the two monthly allowances, both
+resetting when your billing month ends. This isn't an official Cursor API,
+so it may stop working when Cursor changes its site; `cursor_usage = off`
+turns it off.
+
+## Switching agents on the device
+
+The **Accounts** page lists Codex and Cursor below your Claude folders. The
+device shows one agent's usage at a time: at first whichever moved last.
+**Tap the top-left corner** to switch to the next one (Claude, then Codex,
+then Cursor, then Claude again); it keeps to your pick until the next tap,
+across restarts too. Claude's usage has Clawd in that corner; Codex's and
+Cursor's have their own icon there, and Clawd stays out of sight until you
+switch back. With the clock off, the title names the agent too. An agent with
+no usage yet shows its name over empty cards marked "No data". Clawd still
+reacts to every agent's activity, and alerts still come through.
 
 Hooks let Clawd react to activity and show alerts. The local event log
 contains timestamps, event types, and session IDs. Alerts also store the
@@ -215,6 +233,7 @@ seconds and preserves comments and unknown keys when saving.
 | `claude_path` | found on `PATH` | Full path to the Claude Code executable, if detection fails. |
 | `update_check` | `on` | Check for firmware releases daily. |
 | `codex_usage` | `on` | While Codex is installed (`~/.codex` or `$CODEX_HOME`), read its 5-hour and weekly usage from its session logs and show it as one more account. `off` stops reading it. |
+| `cursor_usage` | `on` | While the Cursor editor is installed, read its Auto and API allowances from Cursor's dashboard with the editor's sign-in and show them as one more account. `off` stops reading it. |
 | `alert_on` | `permission, question, elicitation` | Which waits alert on the device and tray: `permission`, `question`, `idle`, `elicitation` (MCP input), or `none`. Set on the Hooks page. Other notification types follow `permission`. |
 | `release_repo` | `HermannBjorgvin/Clawdmeter` | GitHub repository used for firmware releases. |
 | `onboarding_done` | unset | `true` after setup is finished or skipped. |

@@ -68,6 +68,11 @@ struct Layout {
 
 Layout layout_compute(const LayoutShape& shape);
 
+// Screen point (x, y) is on the corner seat as a touch target (the agent
+// switch): from the panel's left edge to just past the seat's art, from the
+// top down to the first card, so a thumb finds it.
+bool layout_in_corner(const Layout& L, int x, int y);
+
 // Corner icon sizes the layout plans with (ui.cpp checks them against the art).
 #define LAYOUT_LOGO_SLOT        80   // logo.h LOGO_HEIGHT
 #define LAYOUT_LOGO_SLOT_SMALL  40

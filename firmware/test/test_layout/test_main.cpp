@@ -85,7 +85,7 @@ static Box status_box(const char* text) {
 }
 
 // Clock strings for one format: every time of day, and the no-clock titles
-// ("Usage", "Claude", "Codex") with the 24-hour clock.
+// ("Usage", "Claude", "Codex", "Cursor") with the 24-hour clock.
 static void each_title(bool h12, void (*fn)(const char*)) {
     char buf[12];
     for (int h = 0; h < 24; h++)
@@ -116,6 +116,16 @@ static void check_panel(const Panel& p) {
     check_on_glass("corner Clawd", logo_art());
     check_on_glass("battery", battery());
     check_apart("corner Clawd vs battery", logo_art(), battery());
+
+    // The corner seat's touch target (the agent switch) covers Clawd's art,
+    // and with it an agent icon in his seat, but no card and not the battery.
+    const Box art = logo_art(), b = battery();
+    for (int x : { art.x, art.x + art.w - 1 })
+        for (int y : { art.y, art.y + art.h - 1 })
+            if (!layout_in_corner(L, x, y)) fail("corner target misses the seat", art);
+    for (int i = 0; i < 2; i++)
+        if (layout_in_corner(L, L.card[i].x, L.card[i].y)) fail("corner target on a card", card(i));
+    if (layout_in_corner(L, b.x, b.y + b.h - 1)) fail("corner target on the battery", b);
     for (title_fmt = 0; title_fmt < 2; title_fmt++)
         if (L.title_font[title_fmt]) each_title(title_fmt == 1, check_title);
     if (p.w >= 200 && !L.title_font[0]) fail("no room for the title", { 0, 0, p.w, 0 });
@@ -136,9 +146,9 @@ static void check_panel(const Panel& p) {
     // Inside a card.
     const int inner_w = L.card[0].w - 2 * L.pad_x, inner_h = L.card[0].h - 2 * L.pad_y;
     const int pill_w = 2 * L.pill_pad_x + 4;   // padding + PILL_GAP
-    for (int i : { 0, 1, 3 })   // session, weekly, period: "100%" beside the pill
+    for (int i : { 0, 1, 3, 4, 5 })   // session, weekly, period, Cursor's two: "100%" beside the pill
         if (text_w(L.pct_font, "100%") + pill_w + text_w(L.pill_font, L.pills[i]) > inner_w)
-            fail("percentage vs pill", card(i == 0 ? 0 : 1));
+            fail("percentage vs pill", card(i == 0 || i == 4 ? 0 : 1));
     if (text_w(L.ent_pct_font, "100") + 4 + text_w(L.reset_font, "%") + pill_w
         + text_w(L.pill_font, L.pills[2]) > inner_w)
         fail("spending vs pill", card(0));

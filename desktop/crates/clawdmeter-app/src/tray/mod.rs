@@ -115,7 +115,7 @@ impl Items {
             label = "Bluetooth unavailable".into();
         }
         self.status.set_text(format!("Clawdmeter · {label}"));
-        let account = snap.account.as_deref().map(|a| tilde(a, &paths.home));
+        let account = snap.agent.clone().or_else(|| snap.account.as_deref().map(|a| tilde(a, &paths.home)));
         self.account.set_text(match (account, snap.age(now)) {
             (Some(a), Some(age)) => format!("{a} · updated {}", ago(age)),
             (Some(a), None) => a,

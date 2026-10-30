@@ -81,8 +81,9 @@ The app writes one complete JSON object per write to RX
 - Usage: `s sr w wr st acct tp pd rd t tf c ok`. `sr`/`wr` = -1 means not
   started or unknown. `acct:"ent"` is a spend-capped account: `s` is spend %,
   `tp/pd/rd` the billing period. `{"ok":false}` means no data. `pv` names the
-  agent (`cx` Codex, `cl` Claude) while Codex is set up; it titles the meters
-  and a change of agent isn't a reset.
+  agent (`cl` Claude, `cx` Codex, `cu` Cursor) while Codex or Cursor is set
+  up: it titles the meters, Codex's and Cursor's icons take Clawd's corner
+  seat (`agent_icons.h`), and a change of agent isn't a reset.
 - Attention: `b` (alert chime), `m` (ASCII message), `x` (clear).
 - Fast clock: `a` (activity 0–3), `e` + `es` (event `p`/`s`/`b` and its
   sequence), `n` (active sessions). `rp:1` marks the usage numbers as a replay
@@ -96,7 +97,9 @@ The app writes one complete JSON object per write to RX
   `{"dismiss":true}` on TX (`…-0003`) when a tap or the 2-minute timeout ends
   an alert. The app clears its own alert and doesn't echo a clear back. Alerts
   nobody clears expire in the app after 2 minutes (a test alert after 30 s);
-  if the device still shows one, the app sends `x`.
+  if the device still shows one, the app sends `x`. `{"agent":"next"}` on TX
+  when a tap on the corner seat (while `pv` is present) asks for the next
+  agent: the app switches, keeps to it, and writes its numbers at once.
 
 Adding or renaming a key means changing both sides: `clawdmeter-core`'s
 `keys_match_firmware_parser` test cross-checks the app's keys against

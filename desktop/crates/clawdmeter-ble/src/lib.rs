@@ -489,6 +489,9 @@ pub enum DeviceEvent {
     /// TX `{"dismiss":true}`: the alert ended on the device (a tap, or its
     /// own timeout).
     Dismissed,
+    /// TX `{"agent":"next"}`: a tap on the corner asked for the next agent's
+    /// numbers (only while the app names the agent, `pv`).
+    NextAgent,
 }
 
 /// The device's events, in order.
@@ -504,6 +507,9 @@ pub fn device_event(uuid: Uuid, value: &[u8]) -> Option<DeviceEvent> {
         return None;
     }
     let text: String = std::str::from_utf8(value).ok()?.chars().filter(|c| !c.is_whitespace()).collect();
+    if text.contains("\"agent\":\"next\"") {
+        return Some(DeviceEvent::NextAgent);
+    }
     text.contains("\"dismiss\":true").then_some(DeviceEvent::Dismissed)
 }
 
@@ -602,7 +608,7 @@ impl DeviceLink {
             }
         }
         for c in &notifying {
-            let what = if c.uuid == REQ_UUID { "refresh" } else { "dismiss" };
+            let what = if c.uuid == REQ_UUID { "refresh" } else { "dismiss and agent switch" };
             match tokio::time::timeout(opts.subscribe_timeout, p.subscribe(c)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => log::warn!("{what} subscription unavailable: {e}"),
@@ -906,12 +912,15 @@ mod tests {
         assert_eq!(device_event(TX_UUID, br#"{"err":true}"#), None);
         assert_eq!(device_event(TX_UUID, &[0xff, 0xfe]), None);
         assert_eq!(device_event(RX_UUID, br#"{"dismiss":true}"#), None);
-        // The firmware's reply, as written.
+        assert_eq!(device_event(TX_UUID, br#"{"agent":"next"}"#), Some(DeviceEvent::NextAgent));
+        assert_eq!(device_event(RX_UUID, br#"{"agent":"next"}"#), None);
+        // The firmware's replies, as written.
         let src = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../firmware/src/ble.cpp"),
         )
         .unwrap();
         assert!(src.contains(r#"tx_char->setValue("{\"dismiss\":true}");"#));
+        assert!(src.contains(r#"tx_char->setValue("{\"agent\":\"next\"}");"#));
     }
 
     #[test]

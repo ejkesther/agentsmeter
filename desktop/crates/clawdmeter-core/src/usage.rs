@@ -157,6 +157,16 @@ pub enum UsageError {
     NoCodexUsage,
     /// Codex's session logs couldn't be read.
     CodexLogs(String),
+    /// The Cursor editor isn't signed in (its state database holds no
+    /// token, [`crate::cursor`]).
+    NoCursorSignIn,
+    /// Cursor's dashboard refused the editor's sign-in (401 / 403).
+    CursorRejected,
+    /// Cursor answered with nothing to show: an unlimited plan, or a shape
+    /// this app doesn't know (it's not a documented API).
+    NoCursorUsage,
+    /// Cursor's dashboard or the editor's database couldn't be read.
+    CursorApi(String),
 }
 
 impl std::fmt::Display for UsageError {
@@ -178,6 +188,10 @@ impl std::fmt::Display for UsageError {
             UsageError::Offline(e) => write!(f, "usage endpoint unreachable: {e}"),
             UsageError::NoCodexUsage => write!(f, "no rate limits in Codex's session logs yet"),
             UsageError::CodexLogs(e) => write!(f, "couldn't read Codex's session logs: {e}"),
+            UsageError::NoCursorSignIn => write!(f, "the Cursor editor isn't signed in"),
+            UsageError::CursorRejected => write!(f, "Cursor refused the editor's sign-in"),
+            UsageError::NoCursorUsage => write!(f, "Cursor's usage summary had nothing to show"),
+            UsageError::CursorApi(e) => write!(f, "couldn't read Cursor's usage: {e}"),
         }
     }
 }
@@ -206,6 +220,8 @@ impl UsageError {
                 | UsageError::Offline(_)
                 // Retried every minute; Codex reads never back off (not the idle source).
                 | UsageError::CodexLogs(_)
+                // Retried on Cursor's own 5-minute cadence.
+                | UsageError::CursorApi(_)
         )
     }
 
@@ -254,6 +270,10 @@ impl UsageError {
                 "No Codex usage yet. It appears after Codex's next reply when Codex signs in with ChatGPT.".into()
             }
             UsageError::CodexLogs(_) => "Couldn't read Codex's session logs. Retrying.".into(),
+            UsageError::NoCursorSignIn => "Sign in to the Cursor editor to show its usage.".into(),
+            UsageError::CursorRejected => "Cursor didn't accept its sign-in. Opening Cursor renews it.".into(),
+            UsageError::NoCursorUsage => "Cursor reports no usage to show for this plan.".into(),
+            UsageError::CursorApi(_) => "Couldn't read Cursor's usage. Retrying.".into(),
         }
     }
 }

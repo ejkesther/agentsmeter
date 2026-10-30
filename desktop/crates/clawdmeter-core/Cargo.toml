@@ -16,3 +16,4 @@ log.workspace = true
 unicode-normalization.workspace = true
 ureq.workspace = true
 sha2.workspace = true
+rusqlite.workspace = true

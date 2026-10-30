@@ -35,7 +35,7 @@ struct UsageData {
     int8_t   liveliness;     // `lv` 1-5 (clamped); -1 = absent (keep the saved level)
     int16_t  attn_anim_s;    // `aa` attention animation, seconds 0-120 (0 = off); -1 = absent
     int8_t   pace_marker;    // `pm` 1 = pace marker on the usage bars, 0 = off; -1 = absent
-    char     provider[4];    // `pv` whose numbers: "cl" Claude, "cx" Codex; "" = absent (Claude)
+    char     provider[4];    // `pv` whose numbers: "cl" Claude, "cx" Codex, "cu" Cursor; "" = absent (Claude)
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };

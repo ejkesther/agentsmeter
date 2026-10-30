@@ -102,6 +102,20 @@ impl Agent {
             Agent::Cursor => "Cursor",
         }
     }
+
+    /// The device's `pv` code for its numbers.
+    pub fn pv(self) -> &'static str {
+        match self {
+            Agent::Claude => "cl",
+            Agent::Codex => "cx",
+            Agent::Cursor => "cu",
+        }
+    }
+
+    /// An `id` back ([`Agent::id`]); `None` for any other word.
+    pub fn from_id(id: &str) -> Option<Agent> {
+        [Agent::Claude, Agent::Codex, Agent::Cursor].into_iter().find(|a| a.id() == id.trim())
+    }
 }
 
 /// One events.log line.

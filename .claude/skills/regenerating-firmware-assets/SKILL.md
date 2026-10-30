@@ -42,6 +42,18 @@ would render invisible. Only icons that overlap non-uniform backgrounds
 (today the battery icons) need RGB565A8; the rest are raw RGB565 baked over
 the panel background inside opaque zones.
 
+## Agent icons (`firmware/src/agent_icons.h`)
+
+```bash
+node tools/agent_icons.js                             # no dependencies
+```
+
+Codex's and Cursor's corner icons: original pixel art drawn as 24x16-cell
+grids inside the script (the corner Clawd's grid), rendered at 3 and 2 px
+per cell so each fills his seat (`ui.cpp` static-asserts the sizes). Edit
+the grids or palettes there, rerun, and check the corner with the
+`verifying-firmware-ui` skill (`payload pv=cx` / `pv=cu`).
+
 ## Clawd animations (`firmware/src/splash_animations.h`)
 
 ```bash

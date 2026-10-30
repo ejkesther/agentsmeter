@@ -114,9 +114,11 @@ static void render(const ClawdAnim* a, uint16_t f, bool mirror, lv_image_dsc_t* 
     lv_obj_invalidate(o);
 }
 
+static bool hidden = false;   // mascot_set_hidden: another agent's icon has the seat
+
 static void show(lv_obj_t* o, bool on) {
     if (!o) return;
-    if (on) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    if (on && !hidden) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
     else               lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -399,6 +401,12 @@ void mascot_reset(void) {
 void mascot_set_minimal(bool on) {
     minimal = on;
     mascot_reset();
+}
+
+void mascot_set_hidden(bool on) {
+    hidden = on;
+    show(img, !on);
+    show(big_img, false);
 }
 
 void mascot_attention(bool on, bool to_seat) {

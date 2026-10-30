@@ -21,6 +21,9 @@ bool ui_meters_live(void);
 // The pairing hint (shown while disconnected) is on screen.
 bool ui_pair_hint_visible(void);
 
+// Screen point (x, y) is on the corner seat's touch target (layout.h).
+bool ui_in_corner(int x, int y);
+
 enum PairHint {
     PAIR_HINT_NORMAL,    // how to pair on this board
     PAIR_HINT_HOLDING,   // a touch hold toward clearing the pairing is running

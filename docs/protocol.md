@@ -25,6 +25,11 @@ It sends `{"dismiss":true}` on TX when a tap or the device's 2-minute timeout
 ends an alert, so the app clears its corresponding alert too. The app expires
 an alert nothing cleared after the same 2 minutes (a test alert after 30
 seconds) and sends `x` if the device still shows it.
+It sends `{"agent":"next"}` on TX when a tap on the corner seat asks for the
+next agent's numbers (only while the last payload named one with `pv`). The
+app moves on to the next agent set up there (Claude → Codex → Cursor), keeps
+to it until the next tap, and writes its numbers at once (`rp:1`), or
+`{"ok":false,"pv":…}` when that agent has none yet.
 
 ```json
 {"s":45,"sr":120,"w":28,"wr":7200,"st":"allowed","acct":"pro","ok":true,"a":2,"e":"p","es":14,"n":1}
@@ -45,4 +50,4 @@ seconds) and sends `x` if the device still shows it.
 | `lv` | How lively Clawd is, `1` (No-nonsense) to `5` (All-nonsense); `3` is the default. Sent with every data payload and right away when the setting changes. The device stores the last value in NVS, so it applies from boot before the app connects; absent = keep the stored value. |
 | `aa` | How long Clawd points and waves for an alert, in seconds: `120` (the default, the whole alert), `30`, `10`, or `0` = no animation. Only the animation: the alert's message, tap, `x`, timeout and dismiss notify are unchanged. Sent like `lv` and stored the same way (clamped to 0–120); absent = keep the stored value. |
 | `pm` | Pace marker: `1` draws a line on the session and weekly bars at the elapsed share of each window (5 hours, 7 days) and colours the fill by pace (green at or behind it, amber ahead, red at 100%); `0` keeps the plain 50/80% colours. A bar with no reset time (`sr`/`wr` = -1) and spend-capped accounts keep the plain colours. Sent like `lv` and stored the same way; absent = keep the stored value. |
-| `pv` | Whose numbers these are: `cx` Codex, `cl` Claude. Sent only while Codex is set up too; absent means Claude. With no clock, the title reads `Codex` or `Claude` (`Usage` when absent or unknown). A change between agents starts a new series for the rate math, so a lower session % there is not a reset. Older firmware ignores it. |
+| `pv` | Whose numbers these are: `cl` Claude, `cx` Codex, `cu` Cursor. Sent only while Codex or Cursor is set up too, on `{"ok":false}` as well; absent means Claude. With no clock, the title reads `Claude`, `Codex` or `Cursor` (`Usage` when absent or unknown). For `cx` and `cu` that agent's icon takes Clawd's corner seat (Clawd stays out of sight and still), and Cursor's cards read `Auto` and `API`: its two monthly allowances, coloured by how full they are, with no pace marker. A switch to an agent with `ok:false` shows its name over empty cards. A change between agents starts a new series for the rate math, so a lower session % there is not a reset. While `pv` is present, a tap on the corner seat sends `{"agent":"next"}`. Older firmware ignores it. |

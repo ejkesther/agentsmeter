@@ -15,7 +15,7 @@ use clawdmeter_ble::{
 use clawdmeter_core::attention::AttentionInbox;
 use clawdmeter_core::backoff;
 use clawdmeter_core::engine::PollPlan;
-use clawdmeter_core::events::EventTail;
+use clawdmeter_core::events::{Agent, EventTail};
 use clawdmeter_core::probe;
 use clawdmeter_core::usage;
 use clawdmeter_core::{unix_now, Engine, EngineStatus, HostClock, Paths, Settings, WriteKind};
@@ -144,10 +144,16 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
             .iter()
             .map(|d| d.display().to_string())
             .chain(settings.codex_home.iter().map(|h| format!("{} (Codex)", h.display())))
+            .chain(settings.cursor_db.iter().map(|d| format!("{} (Cursor)", d.display())))
             .collect::<Vec<_>>()
             .join(", ")
     );
     let mut engine = Engine::new(settings);
+    // The agent picked on the device last time stays on.
+    engine.restore_pick(load_pick(&paths));
+    if let Some(a) = engine.pick() {
+        log::info!("showing {} (picked on the device)", a.name());
+    }
     // Blocks the usage endpoint set survive restarts (a call during one
     // lengthens it).
     engine.restore_blocks(&backoff::load_blocks(&paths.usage_blocks_file()), unix_now());
@@ -274,6 +280,13 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                         log::info!("attention alert dismissed on the device");
                         engine.on_device_dismissed();
                     }
+                    DeviceEvent::NextAgent => match engine.next_agent() {
+                        Some(a) => {
+                            log::info!("showing {} (picked on the device)", a.name());
+                            save_pick(&paths, a);
+                        }
+                        None => log::info!("next agent asked for on the device, but only one is set up"),
+                    },
                 }
             }
         }
@@ -282,7 +295,10 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                 for (d, r) in &results {
                     match &r.result {
                         // Read every minute until Codex has been used here.
-                        Err(e @ usage::UsageError::NoCodexUsage) => log::debug!("{}: {e}", d.display()),
+                        // Read on their cadence until they're used (or signed in) here.
+                        Err(e @ (usage::UsageError::NoCodexUsage | usage::UsageError::NoCursorSignIn)) => {
+                            log::debug!("{}: {e}", d.display())
+                        }
                         Err(e) => log::warn!("{}: {e}", d.display()),
                         Ok(_) => {}
                     }
@@ -383,6 +399,7 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                     WriteKind::Heartbeat => "Heartbeat",
                     WriteKind::Attention => "Attention",
                     WriteKind::Event => "Event",
+                    WriteKind::Switch => "Switch",
                     WriteKind::NoData => "No data",
                 };
                 log::info!("{label}: {}", String::from_utf8_lossy(&bytes));
@@ -433,7 +450,7 @@ pub fn once(paths: &Paths) -> i32 {
         println!("{}: {}", d.display(), usage::paused_message(b.until, clawdmeter_core::platform::utc_offset_secs()));
     }
     // Nothing is known yet, so the idle source for every account (no
-    // message), and Codex's own logs.
+    // message), Codex's own logs and Cursor's dashboard.
     let mut accounts: Vec<PathBuf> =
         settings.config_dirs.iter().filter(|d| !blocked.contains_key(*d)).cloned().collect();
     let mut plans = vec![probe::Plan::Usage; accounts.len()];
@@ -441,6 +458,11 @@ pub fn once(paths: &Paths) -> i32 {
         accounts.push(home.clone());
         plans.push(probe::Plan::CodexLogs);
     }
+    if let Some(db) = &settings.cursor_db {
+        accounts.push(db.clone());
+        plans.push(probe::Plan::CursorApi);
+    }
+    engine.restore_pick(load_pick(paths));
     let plan = PollPlan { reason: clawdmeter_core::cadence::PollReason::Startup, plans, accounts };
     let results = poll_all(claude, plan, paths.home.clone(), paths.state_dir.clone());
     let mut ok = false;
@@ -478,5 +500,16 @@ pub fn once(paths: &Paths) -> i32 {
         0
     } else {
         1
+    }
+}
+
+/// The agent picked on the device by a previous run, if any.
+fn load_pick(paths: &Paths) -> Option<Agent> {
+    std::fs::read_to_string(paths.shown_agent_file()).ok().and_then(|s| Agent::from_id(&s))
+}
+
+fn save_pick(paths: &Paths, agent: Agent) {
+    if let Err(e) = std::fs::write(paths.shown_agent_file(), format!("{}\n", agent.id())) {
+        log::warn!("couldn't save the agent picked on the device: {e}");
     }
 }

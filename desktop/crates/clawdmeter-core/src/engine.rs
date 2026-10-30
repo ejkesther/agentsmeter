@@ -29,6 +29,14 @@ pub const EVENT_FRESH_SECS: i64 = 60;
 pub const CODEX_READ_SECS: i64 = 60;
 /// And this long after a Codex Stop (s), for the turn's last snapshot.
 pub const CODEX_AFTER_STOP_SECS: i64 = 3;
+/// Cursor's dashboard is asked this often (s): a web call, kept rare
+/// ([`crate::cursor`]).
+pub const CURSOR_READ_SECS: i64 = 300;
+/// And this long after a Cursor Stop (s), once the dashboard has counted
+/// the turn.
+pub const CURSOR_AFTER_STOP_SECS: i64 = 20;
+/// Never sooner than this after the last ask (s), whatever asks.
+pub const CURSOR_MIN_GAP_SECS: i64 = 60;
 
 /// Why a write happens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +49,10 @@ pub enum WriteKind {
     Event,
     /// Keep-alive replay.
     Heartbeat,
-    /// Every account is logged out: `{"ok":false}`.
+    /// Another agent's numbers, picked on the device ([`Engine::next_agent`]).
+    Switch,
+    /// No numbers to show: every account is logged out, or the agent picked
+    /// on the device has none yet (`{"ok":false}`).
     NoData,
 }
 
@@ -92,6 +103,8 @@ pub struct AccountError {
 pub struct EngineStatus {
     /// Account shown on the device.
     pub active_account: Option<PathBuf>,
+    /// Whose it is ([`Engine::shown_agent`]).
+    pub agent: Agent,
     /// Its latest numbers.
     pub reading: Option<UsageReading>,
     /// Seconds since those numbers were read.
@@ -140,11 +153,19 @@ pub struct Engine {
     claude_selector: PlanSelector<PathBuf>,
     accounts: BTreeMap<PathBuf, AccountState>,
     in_flight: Vec<PathBuf>,
-    /// The account on the device (a Claude config dir, or Codex's home).
+    /// The account on the device (a Claude config dir, Codex's home or
+    /// Cursor's state database).
     active: Option<PathBuf>,
     claude_active: Option<PathBuf>,
+    /// The agent picked on the device (a tap on its corner): its numbers
+    /// stay on, whoever moves. `None`: whichever account moved last.
+    pick: Option<Agent>,
+    /// The pick changed what's on the device: the next write sends it.
+    switched: bool,
     /// The latest Codex Stop: its logs are read again shortly after.
     codex_stop_at: Option<i64>,
+    /// The latest Cursor Stop: its dashboard is asked again a little after.
+    cursor_stop_at: Option<i64>,
     rate: RateTracker,
     hooks_installed: bool,
     fresh_poll: bool,
@@ -189,7 +210,10 @@ impl Engine {
             in_flight: Vec::new(),
             active: None,
             claude_active: None,
+            pick: None,
+            switched: false,
             codex_stop_at: None,
+            cursor_stop_at: None,
             rate: RateTracker::default(),
             hooks_installed: false,
             fresh_poll: false,
@@ -221,10 +245,21 @@ impl Engine {
         }
         self.scheduler.cadence = Cadence::from_settings(settings.poll_interval, settings.poll_interval_explicit);
         // A newly added account has never been polled, so it is due at once.
-        if settings.config_dirs != self.settings.config_dirs || settings.codex_home != self.settings.codex_home {
-            self.accounts.retain(|k, _| settings.config_dirs.contains(k) || settings.codex_home.as_ref() == Some(k));
+        if settings.config_dirs != self.settings.config_dirs
+            || settings.codex_home != self.settings.codex_home
+            || settings.cursor_db != self.settings.cursor_db
+        {
+            self.accounts.retain(|k, _| {
+                settings.config_dirs.contains(k)
+                    || settings.codex_home.as_ref() == Some(k)
+                    || settings.cursor_db.as_ref() == Some(k)
+            });
         }
         self.settings = settings;
+        // A picked agent that's no longer set up: back to whichever moved last.
+        if self.pick.is_some_and(|a| !self.agents().contains(&a)) {
+            self.set_pick(None);
+        }
     }
 
     /// Whether events.log exists.
@@ -251,8 +286,12 @@ impl Engine {
         }
         if claude {
             self.claude_activity.ingest(ev);
-        } else if ev.agent == Agent::Codex && ev.kind == HookKind::Stop {
-            self.codex_stop_at = Some(now);
+        } else if ev.kind == HookKind::Stop {
+            match ev.agent {
+                Agent::Codex => self.codex_stop_at = Some(now),
+                Agent::Cursor => self.cursor_stop_at = Some(now),
+                Agent::Claude => {}
+            }
         }
         match self.activity.ingest(ev) {
             Signal::Prompt { .. } => {
@@ -380,7 +419,7 @@ impl Engine {
     }
 
     fn refresh_at(&self, dir: &PathBuf, now: i64) -> Option<i64> {
-        if self.is_codex(dir) {
+        if self.agent_of(dir) != Agent::Claude {
             return None;
         }
         self.scheduler.earliest_poll(&self.clock(dir, now))
@@ -390,24 +429,67 @@ impl Engine {
         self.settings.codex_home.as_ref() == Some(dir)
     }
 
+    /// Whose account `dir` is: Codex's home, Cursor's state database, or a
+    /// Claude config dir.
+    fn agent_of(&self, dir: &PathBuf) -> Agent {
+        if self.is_codex(dir) {
+            Agent::Codex
+        } else if self.settings.cursor_db.as_ref() == Some(dir) {
+            Agent::Cursor
+        } else {
+            Agent::Claude
+        }
+    }
+
     /// When Codex's logs are next due to be read, and why: at once the
     /// first time, then every [`CODEX_READ_SECS`], sooner after a Codex Stop
     /// or a refresh request. `None` without Codex.
     fn codex_due(&self, now: i64) -> Option<(i64, PollReason)> {
         let home = self.settings.codex_home.as_ref()?;
-        let Some(last) = self.accounts.get(home).and_then(|a| a.last_attempt_at) else {
-            return Some((now, PollReason::Startup));
+        Some(self.agent_due(home, self.codex_stop_at, CODEX_READ_SECS, CODEX_AFTER_STOP_SECS, 0, now))
+    }
+
+    /// When Cursor's dashboard is next due, and why: at once the first time,
+    /// then every [`CURSOR_READ_SECS`], sooner after a Cursor Stop or a
+    /// refresh request, but never within [`CURSOR_MIN_GAP_SECS`] of the last
+    /// ask. `None` without Cursor.
+    fn cursor_due(&self, now: i64) -> Option<(i64, PollReason)> {
+        let db = self.settings.cursor_db.as_ref()?;
+        Some(self.agent_due(
+            db,
+            self.cursor_stop_at,
+            CURSOR_READ_SECS,
+            CURSOR_AFTER_STOP_SECS,
+            CURSOR_MIN_GAP_SECS,
+            now,
+        ))
+    }
+
+    /// Codex's and Cursor's cadence: every `every` s from the last ask,
+    /// `after_stop` s after their own Stop, at a refresh request, and no
+    /// sooner than `min_gap` s after the last ask.
+    fn agent_due(
+        &self,
+        account: &PathBuf,
+        stop_at: Option<i64>,
+        every: i64,
+        after_stop: i64,
+        min_gap: i64,
+        now: i64,
+    ) -> (i64, PollReason) {
+        let Some(last) = self.accounts.get(account).and_then(|a| a.last_attempt_at) else {
+            return (now, PollReason::Startup);
         };
-        let mut due = (last + CODEX_READ_SECS, PollReason::Interval);
+        let mut due = (last + every, PollReason::Interval);
         for (t, why) in [
-            (self.codex_stop_at.filter(|t| *t >= last).map(|t| t + CODEX_AFTER_STOP_SECS), PollReason::AfterStop),
+            (stop_at.filter(|t| *t >= last).map(|t| t + after_stop), PollReason::AfterStop),
             (self.scheduler.requested_at().filter(|t| *t > last), PollReason::Requested),
         ] {
             if let Some(t) = t.filter(|t| *t < due.0) {
-                due = (t, why);
+                due = (t.max(last + min_gap), why);
             }
         }
-        Some(due)
+        due
     }
 
     /// The earliest account's next poll: (unix seconds, reason).
@@ -422,10 +504,12 @@ impl Engine {
 
     /// Start a poll: the accounts due now, stamped as attempted. `None` when
     /// nothing is due. Hand the results to [`Engine::on_poll_results`].
-    /// Codex's home rides along when its logs are due ([`ProbePlan::CodexLogs`]).
+    /// Codex's home rides along when its logs are due ([`ProbePlan::CodexLogs`]),
+    /// and Cursor's database when its dashboard is ([`ProbePlan::CursorApi`]).
     pub fn begin_poll(&mut self, now: i64) -> Option<PollPlan> {
         let codex = self.codex_due(now).filter(|(t, _)| *t <= now);
-        let reason = self.poll_due(now).or(codex.map(|(_, why)| why))?;
+        let cursor = self.cursor_due(now).filter(|(t, _)| *t <= now);
+        let reason = self.poll_due(now).or(codex.map(|(_, why)| why)).or(cursor.map(|(_, why)| why))?;
         let mut accounts: Vec<PathBuf> =
             self.settings.config_dirs.iter().filter(|d| self.account_due(d, now).0 <= now).cloned().collect();
         let mut plans: Vec<ProbePlan> = accounts
@@ -442,6 +526,10 @@ impl Engine {
             accounts.push(home.clone());
             plans.push(ProbePlan::CodexLogs);
         }
+        if let (Some(_), Some(db)) = (cursor, &self.settings.cursor_db) {
+            accounts.push(db.clone());
+            plans.push(ProbePlan::CursorApi);
+        }
         for d in &accounts {
             self.accounts.entry(d.clone()).or_default().last_attempt_at = Some(now);
         }
@@ -454,6 +542,7 @@ impl Engine {
     pub fn on_poll_results<R: Into<probe::Polled>>(&mut self, now: i64, results: Vec<(PathBuf, R)>) {
         let results: Vec<(PathBuf, probe::Polled)> = results.into_iter().map(|(d, r)| (d, r.into())).collect();
         let polled = !results.is_empty();
+        let polled_dirs: Vec<PathBuf> = results.iter().map(|(d, _)| d.clone()).collect();
         let codex_before = self.codex_reading().cloned();
         let mut ok_dirs: Vec<PathBuf> =
             results.iter().filter(|(_, r)| r.result.is_ok()).map(|(d, _)| d.clone()).collect();
@@ -476,9 +565,10 @@ impl Engine {
             }
         }
         // Every configured account's latest answer is a login problem, and
-        // Codex has nothing to show either.
+        // Codex and Cursor have nothing to show either.
         let all_auth = !self.settings.config_dirs.is_empty()
             && self.codex_reading().is_none()
+            && self.settings.cursor_db.as_ref().and_then(|d| self.accounts.get(d)).is_none_or(|a| a.last.is_none())
             && self
                 .settings
                 .config_dirs
@@ -490,22 +580,22 @@ impl Engine {
         // all is left out.
         let sessions: Vec<(PathBuf, u32)> =
             self.accounts.iter().filter_map(|(k, a)| a.last.as_ref().map(|r| (k.clone(), r.session_pct()))).collect();
+        let claude: Vec<(PathBuf, u32)> =
+            sessions.iter().filter(|(k, _)| self.settings.config_dirs.contains(k)).cloned().collect();
+        self.claude_active = self.claude_selector.choose(&claude);
+        let auto = self.selector.choose(&sessions);
         let prev_active = self.active.clone();
-        self.active = self.selector.choose(&sessions);
+        self.active = self.shown_account(auto);
         if self.active != prev_active && sessions.len() > 1 {
             if let Some(a) = &self.active {
                 log::info!("active plan: {}", a.display());
             }
         }
-        // Claude ↔ Codex on the device: another agent's numbers start a new
-        // series, as the firmware does on a `pv` change.
-        let codex = |a: &Option<PathBuf>| a.as_ref().is_some_and(|a| self.is_codex(a));
-        if prev_active.is_some() && codex(&prev_active) != codex(&self.active) {
+        // Another agent's numbers on the device start a new series, as the
+        // firmware does on a `pv` change.
+        if prev_active.is_some() && self.agent_on(&prev_active) != self.agent_on(&self.active) {
             self.rate = RateTracker::default();
         }
-        let claude: Vec<(PathBuf, u32)> =
-            sessions.into_iter().filter(|(k, _)| self.settings.config_dirs.contains(k)).collect();
-        self.claude_active = self.claude_selector.choose(&claude);
         // Only numbers read in this cycle for the shown account are a real
         // poll. When it missed (another account answered), its last values
         // must not enter the rate math, here or on the device: no `Poll`
@@ -519,14 +609,99 @@ impl Engine {
         }
         self.in_flight.clear();
         self.logged_out = all_auth;
-        self.fresh_poll = active_fresh || (all_auth && polled);
+        // The picked agent was asked and still has nothing: "no data" again.
+        let picked_empty = self.pick.is_some()
+            && self.active_reading().is_none()
+            && self.active.as_ref().is_some_and(|a| polled_dirs.contains(a));
+        self.fresh_poll = active_fresh || (all_auth && polled) || picked_empty;
     }
 
-    /// `pv` for the shown account: "cx" for Codex, "cl" for Claude while
-    /// Codex is set up too; nothing without Codex (the device says "Usage").
+    /// The agents with an account here, in the order the device's corner
+    /// cycles them.
+    pub fn agents(&self) -> Vec<Agent> {
+        let s = &self.settings;
+        [
+            (Agent::Claude, !s.config_dirs.is_empty()),
+            (Agent::Codex, s.codex_home.is_some()),
+            (Agent::Cursor, s.cursor_db.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(a, set_up)| set_up.then_some(a))
+        .collect()
+    }
+
+    /// Whose numbers are on the device: the shown account's agent, else
+    /// the pick, else Claude Code's.
+    pub fn shown_agent(&self) -> Agent {
+        self.agent_on(&self.active).or(self.pick).unwrap_or(Agent::Claude)
+    }
+
+    fn agent_on(&self, account: &Option<PathBuf>) -> Option<Agent> {
+        account.as_ref().map(|a| self.agent_of(a))
+    }
+
+    /// The agent picked on the device; `None`: whichever moved last.
+    pub fn pick(&self) -> Option<Agent> {
+        self.pick
+    }
+
+    /// A tap on the device's corner: the next agent's numbers (Claude Code →
+    /// Codex → Cursor, those set up here), kept on from now on and sent at
+    /// once. Returns the new pick; `None` with fewer than two agents.
+    pub fn next_agent(&mut self) -> Option<Agent> {
+        let agents = self.agents();
+        if agents.len() < 2 {
+            return None;
+        }
+        let shown = self.shown_agent();
+        let next = agents.iter().position(|a| *a == shown).map_or(agents[0], |i| agents[(i + 1) % agents.len()]);
+        self.set_pick(Some(next));
+        Some(next)
+    }
+
+    /// Keep to `pick`'s numbers (`None`: whichever moved last) and send
+    /// them at once. An agent that isn't set up here is no pick.
+    pub fn set_pick(&mut self, pick: Option<Agent>) {
+        let prev = self.active.clone();
+        self.apply_pick(pick);
+        if self.active != prev {
+            self.switched = true;
+            if self.agent_on(&prev) != self.agent_on(&self.active) {
+                self.rate = RateTracker::default();
+            }
+        }
+    }
+
+    /// The pick saved by a previous run (at start-up): nothing is sent yet.
+    pub fn restore_pick(&mut self, pick: Option<Agent>) {
+        self.apply_pick(pick);
+    }
+
+    fn apply_pick(&mut self, pick: Option<Agent>) {
+        self.pick = pick.filter(|a| self.agents().contains(a));
+        self.active = self.shown_account(self.active.clone());
+    }
+
+    /// The account on the device: the picked agent's (Claude Code's busiest
+    /// account, or its first while none has numbers), else whichever moved
+    /// last (`auto`).
+    fn shown_account(&self, auto: Option<PathBuf>) -> Option<PathBuf> {
+        match self.pick {
+            None => auto,
+            Some(Agent::Claude) => self.claude_active.clone().or_else(|| self.settings.config_dirs.first().cloned()),
+            Some(Agent::Codex) => self.settings.codex_home.clone(),
+            Some(Agent::Cursor) => self.settings.cursor_db.clone(),
+        }
+    }
+
+    /// `pv` for the shown account while an agent other than Claude Code is
+    /// set up: "cl", "cx" or "cu". Nothing with Claude Code alone: the
+    /// device says "Usage" and has no agent switch.
     fn provider(&self) -> Option<String> {
-        let home = self.settings.codex_home.as_ref()?;
-        Some(if self.active.as_ref() == Some(home) { "cx" } else { "cl" }.to_owned())
+        if self.agents().iter().all(|a| *a == Agent::Claude) {
+            return None;
+        }
+        Some(self.shown_agent().pv().to_owned())
     }
 
     /// Codex's latest reading, when it has one.
@@ -566,11 +741,16 @@ impl Engine {
         let prefs_changed =
             self.sent_lv != Some(self.settings.liveliness) || self.sent_aa != Some(aa) || self.sent_pm != Some(pm);
 
-        let (mut payload, kind) = if self.logged_out {
-            if !(self.fresh_poll || self.attention.pending()) {
+        // The picked agent has no numbers yet: the device shows its name over
+        // empty meters, never another agent's numbers.
+        let picked_empty = self.pick.is_some() && self.active_reading().is_none();
+        let (mut payload, kind) = if self.logged_out || picked_empty {
+            if !(self.fresh_poll || self.switched || self.attention.pending()) {
                 return None;
             }
-            (Payload::no_data(), WriteKind::NoData)
+            let mut p = Payload::no_data();
+            p.pv = self.provider();
+            (p, WriteKind::NoData)
         } else {
             // Nothing to show until the first good poll.
             let reading = self.active_reading()?.clone();
@@ -578,6 +758,8 @@ impl Engine {
                 WriteKind::Poll
             } else if self.attention.pending() {
                 WriteKind::Attention
+            } else if self.switched {
+                WriteKind::Switch
             } else if (new_event || a_changed || n_changed || prefs_changed) && !self.stale(now) {
                 // Any ok payload refreshes the device's DATA_FRESH_MS, so
                 // while the numbers are stale only alerts and polls go out
@@ -631,6 +813,7 @@ impl Engine {
     pub fn mark_written(&mut self, now: i64, w: &Write) {
         self.last_write = Some(now);
         self.fresh_poll = false;
+        self.switched = false;
         if w.payload.b.is_some() || w.payload.m.is_some() || w.payload.x.is_some() || self.attention.pending() {
             self.attention.mark_sent();
         }
@@ -662,6 +845,7 @@ impl Engine {
         let st = self.active_state();
         EngineStatus {
             active_account: self.active.clone(),
+            agent: self.shown_agent(),
             reading: st.and_then(|a| a.last.clone()),
             age_secs: st.and_then(|a| a.age(now)),
             stale: self.stale(now),
@@ -1106,6 +1290,105 @@ mod tests {
         assert_eq!(e.status(T0).active_account, Some(a));
         // Nothing backs off: it is read again a minute later.
         assert_eq!(e.begin_poll(T0 + 60).map(|p| p.accounts), Some(vec![codex]));
+    }
+
+    fn with_cursor() -> (Engine, PathBuf, PathBuf, PathBuf) {
+        let (e, a, codex) = with_codex();
+        let mut s = e.settings().clone();
+        let cursor = PathBuf::from("/h/Cursor/User/globalStorage/state.vscdb");
+        s.cursor_db = Some(cursor.clone());
+        let mut e = Engine::new(s);
+        e.set_hooks_installed(true);
+        (e, a, codex, cursor)
+    }
+
+    // Cursor's dashboard is one more account, asked every 5 minutes, a
+    // little after a Cursor Stop, and never twice within a minute.
+    #[test]
+    fn cursor_is_one_more_account() {
+        let (mut e, a, codex, cursor) = with_cursor();
+        let p = e.begin_poll(T0).unwrap();
+        assert_eq!(p.accounts, vec![a.clone(), codex.clone(), cursor.clone()]);
+        assert_eq!(p.plans, vec![ProbePlan::Usage, ProbePlan::CodexLogs, ProbePlan::CursorApi]);
+        e.on_poll_results(
+            T0,
+            vec![(a.clone(), Ok(reading(5))), (codex.clone(), Ok(reading(7))), (cursor.clone(), Ok(reading(30)))],
+        );
+        let w = write(&mut e, T0).unwrap();
+        assert_eq!((w.payload.s, w.payload.pv.as_deref()), (Some(30), Some("cu")));
+
+        let cursor_due = |e: &mut Engine, t| e.begin_poll(t).is_some_and(|p| p.accounts.contains(&cursor));
+        assert!(!cursor_due(&mut e, T0 + 120));
+        e.on_hook_event(&HookEvent { agent: Agent::Cursor, ..ev(T0 + 130, "Stop") }, T0 + 130);
+        assert!(!cursor_due(&mut e, T0 + 149));
+        assert!(cursor_due(&mut e, T0 + 150), "20 s after its Stop");
+        e.on_hook_event(&HookEvent { agent: Agent::Cursor, ..ev(T0 + 151, "Stop") }, T0 + 151);
+        assert!(!cursor_due(&mut e, T0 + 171), "a minute's gap first");
+        assert!(cursor_due(&mut e, T0 + 210));
+        assert!(!cursor_due(&mut e, T0 + 500));
+        assert!(cursor_due(&mut e, T0 + 510), "then every 5 minutes");
+    }
+
+    // A tap on the device's corner: Claude → Codex → Cursor → Claude, sent
+    // at once, and the pick stays on whoever moves after.
+    #[test]
+    fn the_device_picks_the_agent() {
+        let (mut e, a, codex, cursor) = with_cursor();
+        e.on_poll_results(T0, vec![(a.clone(), Ok(reading(40))), (codex.clone(), Ok(reading(7)))]);
+        write(&mut e, T0).unwrap();
+        assert_eq!((e.shown_agent(), e.pick()), (Agent::Claude, None));
+        assert_eq!(e.agents(), vec![Agent::Claude, Agent::Codex, Agent::Cursor]);
+
+        assert_eq!(e.next_agent(), Some(Agent::Codex));
+        let w = write(&mut e, T0 + 1).unwrap();
+        assert_eq!(
+            (w.kind, w.payload.s, w.payload.rp),
+            (WriteKind::Switch, Some(7), Some(1)),
+            "a replay of its numbers"
+        );
+        assert_eq!(w.payload.pv.as_deref(), Some("cx"));
+        assert!(write(&mut e, T0 + 2).is_none(), "sent once");
+        // Claude moving doesn't take the device back.
+        e.on_poll_results(T0 + 100, vec![(a.clone(), Ok(reading(45)))]);
+        assert_eq!(e.status(T0 + 100).active_account, Some(codex.clone()));
+
+        // Cursor has no numbers yet: its name over empty meters.
+        assert_eq!(e.next_agent(), Some(Agent::Cursor));
+        let w = write(&mut e, T0 + 101).unwrap();
+        assert_eq!((w.kind, w.payload.to_json().as_str()), (WriteKind::NoData, r#"{"ok":false,"pv":"cu"}"#));
+        assert!(write(&mut e, T0 + 102).is_none());
+        e.on_poll_results(T0 + 300, vec![(cursor.clone(), Err(UsageError::NoCursorSignIn))]);
+        assert_eq!(write(&mut e, T0 + 300).unwrap().kind, WriteKind::NoData, "again after it was asked");
+        e.on_poll_results(T0 + 600, vec![(cursor.clone(), Ok(reading(12)))]);
+        let w = write(&mut e, T0 + 600).unwrap();
+        assert_eq!((w.kind, w.payload.s, w.payload.pv.as_deref()), (WriteKind::Poll, Some(12), Some("cu")));
+
+        assert_eq!(e.next_agent(), Some(Agent::Claude));
+        assert_eq!(write(&mut e, T0 + 601).unwrap().payload.s, Some(45));
+
+        // Cursor uninstalled while picked: fine. Codex too, with it picked:
+        // back to whichever moved last.
+        e.next_agent();
+        let mut s = e.settings().clone();
+        s.cursor_db = None;
+        e.update_settings(s.clone());
+        assert_eq!(e.pick(), Some(Agent::Codex));
+        s.codex_home = None;
+        e.update_settings(s);
+        assert_eq!((e.pick(), e.next_agent()), (None, None), "Claude Code alone: nothing to switch");
+    }
+
+    #[test]
+    fn a_saved_pick_waits_for_numbers() {
+        let (mut e, a, codex, _) = with_cursor();
+        e.restore_pick(Some(Agent::Codex));
+        assert_eq!(e.shown_agent(), Agent::Codex);
+        assert!(write(&mut e, T0).is_none(), "nothing sent before the first poll");
+        e.on_poll_results(T0, vec![(a, Ok(reading(40))), (codex, Ok(reading(7)))]);
+        assert_eq!(write(&mut e, T0).unwrap().payload.s, Some(7));
+        let mut e = Engine::new(settings(""));
+        e.restore_pick(Some(Agent::Cursor));
+        assert_eq!(e.pick(), None, "not set up here");
     }
 
     #[test]

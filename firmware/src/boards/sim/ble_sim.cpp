@@ -151,6 +151,19 @@ void ble_request_refresh(void) {}
 void ble_send_dismiss(void) { printf("[sim] TX {\"dismiss\":true}\n"); }
 void ble_set_battery_level(int pct) { (void)pct; }
 
+static void inject(void (*edit)(JsonDocument&));
+
+// Stands in for the app: the next agent's numbers are the scenario's own,
+// under the next name (Claude → Codex → Cursor).
+static const char* const SIM_AGENTS[] = { "cl", "cx", "cu" };
+static int sim_agent = 0;
+static void set_agent(JsonDocument& d) { d["pv"] = SIM_AGENTS[sim_agent]; }
+void ble_send_agent_next(void) {
+    sim_agent = (sim_agent + 1) % 3;
+    printf("[sim] TX {\"agent\":\"next\"} -> pv %s\n", SIM_AGENTS[sim_agent]);
+    inject(set_agent);
+}
+
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {
     printf("[sim] HID press key=0x%02X mod=0x%02X\n", key, modifier);
 }

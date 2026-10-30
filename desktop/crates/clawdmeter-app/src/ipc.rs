@@ -20,6 +20,7 @@ use std::fs;
 use std::io::{self, Write as _};
 use std::path::PathBuf;
 
+use clawdmeter_core::events::Agent;
 use clawdmeter_core::Paths;
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +76,10 @@ pub struct StatusSnapshot {
     pub link_detail: Option<String>,
     /// Account the device shows.
     pub account: Option<String>,
+    /// Its agent's name when that isn't Claude Code ("Codex", "Cursor"):
+    /// what to call the account rather than its folder.
+    #[serde(default)]
+    pub agent: Option<String>,
     /// Session %.
     pub session_pct: Option<u32>,
     /// Weekly %.
@@ -150,6 +155,12 @@ impl StatusSnapshot {
             device_name,
             link_detail,
             account: e.active_account.as_ref().map(|p| p.display().to_string()),
+            agent: e
+                .active_account
+                .as_ref()
+                .map(|_| e.agent)
+                .filter(|a| *a != Agent::Claude)
+                .map(|a| a.name().to_owned()),
             session_pct: reading.map(|r| r.session_pct()),
             week_pct: reading.and_then(|r| r.week.as_ref()).map(|w| w.pct),
             window_started: reading.is_some_and(|r| r.window_started()),
